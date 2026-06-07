@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 
-import { tsShort } from '../utils/format.js';
 import { eventColor } from '../utils/colors.js';
+import { tsShort } from '../utils/format.js';
+import { getScenarioDividers } from '../utils/scenario.js';
 import { PostingBatchCard } from './PostingBatchCard.jsx';
 
-export function Timeline({ events }) {
+export function Timeline({ events, spec }) {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(events[0]?.id ?? null);
@@ -17,12 +18,18 @@ export function Timeline({ events }) {
       if (filter === 'notification' && event.type !== 'notification') return false;
       if (filter === 'accrual' && event.type !== 'accrual') return false;
       if (!text) return true;
-      return [event.timestamp, event.summary, event.notification_type, ...(event.logs || [])]
-        .join(' ')
-        .toLowerCase()
-        .includes(text);
+      const searchable = [
+        event.timestamp,
+        event.summary,
+        event.notification_type,
+        ...(event.logs || []),
+        ...(event.pibs || []).map((b) => b.client_batch_id || b.id || ''),
+      ];
+      return searchable.join(' ').toLowerCase().includes(text);
     });
   }, [events, filter, query]);
+
+  const dividers = useMemo(() => getScenarioDividers(events, spec), [events, spec]);
 
   const selected = events.find((event) => event.id === selectedId);
 
@@ -36,20 +43,26 @@ export function Timeline({ events }) {
             </button>
           ))}
         </div>
-        <input className="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events" />
+        <input className="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events or batch codes" />
         <div className="event-list">
           {filtered.map((event) => (
-            <button
-              key={event.id}
-              className={`event-row ${selectedId === event.id ? 'active' : ''}`}
-              onClick={() => setSelectedId(event.id)}
-              style={{ borderLeftColor: eventColor(event.status === 'rejected' ? 'rejected' : event.type) }}
-            >
-              <span className="badge">{event.type}</span>
-              <span className="muted">#{event.id + 1}</span>
-              <span className="event-time">{tsShort(event.timestamp)}</span>
-              <span className="event-summary">{event.summary}</span>
-            </button>
+            <div key={event.id}>
+              {dividers.has(event.id) && (
+                <div className="scenario-divider">
+                  <span>{dividers.get(event.id)}</span>
+                </div>
+              )}
+              <button
+                className={`event-row ${selectedId === event.id ? 'active' : ''}`}
+                onClick={() => setSelectedId(event.id)}
+                style={{ borderLeftColor: eventColor(event.status === 'rejected' ? 'rejected' : event.type) }}
+              >
+                <span className="event-dot" style={{ background: eventColor(event.status === 'rejected' ? 'rejected' : event.type) }} />
+                <span className="event-num">#{event.id + 1}</span>
+                <span className="event-time">{tsShort(event.timestamp)}</span>
+                <span className="event-summary">{event.summary || event.type}</span>
+              </button>
+            </div>
           ))}
         </div>
       </div>
@@ -59,12 +72,17 @@ export function Timeline({ events }) {
 }
 
 function EventDetail({ event }) {
+  const statusColor = event.status === 'rejected' ? '#ef4444' : event.status === 'accepted' ? '#22c55e' : eventColor(event.type);
   return (
     <div className="stack">
-      <section>
-        <div className="section-title">Event #{event.id + 1}</div>
-        <div>{tsShort(event.timestamp)}</div>
-        <span className="badge">{event.status || event.type}</span>
+      <section className="event-detail-header">
+        <div className="event-detail-title">
+          <span className="event-detail-num">Event #{event.id + 1}</span>
+          <span className="event-detail-ts">{tsShort(event.timestamp)}</span>
+        </div>
+        <span className="event-detail-status" style={{ color: statusColor, borderColor: statusColor + '44', background: statusColor + '11' }}>
+          {event.status || event.type}
+        </span>
       </section>
       {event.logs?.length > 0 && (
         <section>

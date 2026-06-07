@@ -9,6 +9,33 @@ async function request(path, options) {
   return data;
 }
 
+async function* streamRunSpec(path, lineNumber = null) {
+  const response = await fetch(`${API_BASE}/api/run-spec`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spec_path: path, line_number: lineNumber }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `Request failed: ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop();
+    for (const part of parts) {
+      if (part.startsWith('data: ')) {
+        yield JSON.parse(part.slice(6));
+      }
+    }
+  }
+}
+
 export const api = {
   tree: () => request('/api/tree'),
   scenarioSummary: (responsePath) =>
@@ -23,4 +50,5 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+  runSpec: streamRunSpec,
 };

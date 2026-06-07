@@ -5,15 +5,46 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 StepType = Literal[
+    # setup
     "config",
     "product",
     "account",
-    "balance_check",
+    # posting instructions
     "inbound",
     "outbound",
+    "inbound_auth",
+    "outbound_auth",
+    "transfer",
+    "settlement",
+    "release",
+    "custom_instruction",
+    "posting_instruction_batch",
+    "auth_adjustment",
+    # checks
+    "balance_check",
+    "balance_check_multi",
     "accepted",
     "rejected",
     "notification",
+    "no_notifications",
+    "schedule",
+    "parameter_rejected",
+    "derived_parameters",
+    "derived_parameter_dict",
+    # account management
+    "change_instance_params",
+    "change_template_params",
+    "update_account_status",
+    "account_close",
+    "update_account_version",
+    "exception_msg",
+    # flags
+    "flag_definition",
+    "flag",
+    # misc
+    "global_param",
+    "instruction_detail_check",
+    "batch_detail_check",
     "other",
 ]
 

@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 
 import { tsShort } from '../utils/format.js';
+import { getScenarioDividers } from '../utils/scenario.js';
 import { PostingBatchCard } from './PostingBatchCard.jsx';
 
-export function Postings({ events }) {
+export function Postings({ events, spec }) {
   const [query, setQuery] = useState('');
 
   const batches = useMemo(() => {
@@ -30,7 +31,10 @@ export function Postings({ events }) {
     });
   }, [events, query]);
 
+  const dividers = useMemo(() => getScenarioDividers(events, spec), [events, spec]);
   const eventCount = new Set(batches.map((b) => b.event.id)).size;
+
+  let currentScenario = null;
 
   return (
     <div className="tab-page">
@@ -50,19 +54,34 @@ export function Postings({ events }) {
         {batches.length === 0 && (
           <div className="notice muted">No posting batches found.</div>
         )}
-        {batches.map(({ event, batch, batchIdx }) => (
-          <div key={`${event.id}-${batchIdx}`} className="postings-group">
-            <div className="postings-group-label">
-              Event #{event.id + 1} — {tsShort(event.timestamp)}
+        {batches.map(({ event, batch, batchIdx }) => {
+          let divider = null;
+          if (dividers.has(event.id) && dividers.get(event.id) !== currentScenario) {
+            currentScenario = dividers.get(event.id);
+            divider = (
+              <div className="scenario-divider" key={`scen-${event.id}`}>
+                <span>{currentScenario}</span>
+              </div>
+            );
+          }
+
+          return (
+            <div key={`${event.id}-${batchIdx}`}>
+              {divider}
+              <div className="postings-group">
+                <div className="postings-group-label">
+                  Event #{event.id + 1} — {tsShort(event.timestamp)}
+                </div>
+                <PostingBatchCard
+                  batch={batch}
+                  eventId={event.id}
+                  batchIdx={batchIdx}
+                  defaultExpanded={false}
+                />
+              </div>
             </div>
-            <PostingBatchCard
-              batch={batch}
-              eventId={event.id}
-              batchIdx={batchIdx}
-              defaultExpanded={false}
-            />
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

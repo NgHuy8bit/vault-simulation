@@ -2,7 +2,7 @@ import re
 from typing import Any
 
 
-def process_simulation_response(raw_data: Any) -> dict[str, Any]:
+def process_simulation_response(raw_data: Any, request_data: Any = None) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     accounts_latest: dict[str, dict[str, Any]] = {}
     balance_history: dict[str, Any] = {}
@@ -62,9 +62,10 @@ def process_simulation_response(raw_data: Any) -> dict[str, Any]:
         )
 
     timestamps = [event["timestamp"] for event in events if event["timestamp"]]
+    instance_params = _extract_instance_params(request_data)
     return {
         "events": events,
-        "balances": _latest_balances(accounts_latest),
+        "balances": _latest_balances(accounts_latest, instance_params),
         "balance_history": balance_history,
         "account_history": account_history,
         "accounts": sorted(account_ids),
@@ -173,7 +174,22 @@ def _collect_balances(
                 )
 
 
-def _latest_balances(accounts_latest: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _extract_instance_params(request_data: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(request_data, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for instruction in request_data.get("instructions", []) or []:
+        create = instruction.get("create_account")
+        if not create:
+            continue
+        account_id = create.get("id") or create.get("account_id", "")
+        params = create.get("instance_param_vals", {}) or {}
+        if account_id and params:
+            result[account_id] = params
+    return result
+
+
+def _latest_balances(accounts_latest: dict[str, dict[str, Any]], instance_params: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
     balances: dict[str, Any] = {}
     for account_id, by_key in accounts_latest.items():
         monetary = []
@@ -194,6 +210,8 @@ def _latest_balances(accounts_latest: dict[str, dict[str, Any]]) -> dict[str, An
                 )
             elif balance["asset"] == "PRODUCT_CONFIGURATION":
                 params.append({"name": balance["address"], "value": balance["amount"]})
+        if instance_params and account_id in instance_params:
+            params = [{"name": k, "value": v} for k, v in instance_params[account_id].items()]
         balances[account_id] = {"monetary": monetary, "params": params, "all": all_balances}
     return balances
 

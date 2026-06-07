@@ -99,8 +99,11 @@ function InstructionBlock({ instruction, instIdx }) {
   return (
     <div className="pib-instruction">
       {/* Instruction meta bar */}
-      {(details.event || details.description || extras.length > 0) && (
+      {(instruction.client_transaction_id || details.event || details.description || extras.length > 0) && (
         <div className="pib-inst-meta">
+          {instruction.client_transaction_id && (
+            <span className="pib-inst-txid">TXN: {instruction.client_transaction_id}</span>
+          )}
           {details.event && (
             <span className="pib-inst-event">{details.event}</span>
           )}

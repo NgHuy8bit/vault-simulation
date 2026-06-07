@@ -19,4 +19,11 @@ def scenario_summary(response_path: str = Query(..., alias="response-path")):
         raw_data = json.loads(target.read_text("utf-8"))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"Invalid JSON: {exc}") from exc
-    return process_simulation_response(raw_data)
+    request_data = None
+    request_path = target.with_name(target.name.replace(".response.json", ".request.json"))
+    if request_path.exists():
+        try:
+            request_data = json.loads(request_path.read_text("utf-8"))
+        except json.JSONDecodeError:
+            pass
+    return process_simulation_response(raw_data, request_data)

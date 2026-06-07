@@ -8,16 +8,17 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { SpecView } from './components/SpecView.jsx';
 import { Timeline } from './components/Timeline.jsx';
 
-const TABS = ['timeline', 'diagram', 'postings', 'accounts', 'spec'];
+const SIM_TABS = ['spec', 'timeline', 'diagram', 'postings', 'accounts'];
+const SPEC_ONLY_TABS = ['spec'];
 
 export function App() {
   const [tree, setTree] = useState(null);
   const [loadingTree, setLoadingTree] = useState(true);
-  const [scenario, setScenario] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null);
   const [summary, setSummary] = useState(null);
   const [spec, setSpec] = useState(null);
-  const [activeTab, setActiveTab] = useState('timeline');
-  const [loadingScenario, setLoadingScenario] = useState(false);
+  const [activeTab, setActiveTab] = useState('spec');
+  const [loadingSelection, setLoadingSelection] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -28,59 +29,88 @@ export function App() {
       .finally(() => setLoadingTree(false));
   }, []);
 
-  async function loadScenario(file) {
-    setScenario(file);
+  async function loadSelection(item) {
+    setSelectedItem(item);
     setSummary(null);
     setSpec(null);
     setError('');
-    setLoadingScenario(true);
+    setLoadingSelection(true);
+    setActiveTab('spec');
+
     try {
-      const [scenarioSummary, specLookup] = await Promise.all([
-        api.scenarioSummary(file.responsePath),
-        api.findSpec(file.responsePath).catch(() => ({ found: false })),
-      ]);
-      setSummary(scenarioSummary);
-      if (specLookup?.found) {
-        const parsed = await api.parseSpec(specLookup.path);
-        setSpec({ path: specLookup.path, content: specLookup.content, parsed });
+      const specPath = item.specPath;
+
+      if (item.responsePath) {
+        // Scenario with simulation response
+        const [scenarioSummary, parsedSpec, specRes] = await Promise.all([
+          api.scenarioSummary(item.responsePath),
+          api.parseSpec(specPath).catch(() => null),
+          api.readSpec(specPath).catch(() => null),
+        ]);
+        setSummary(scenarioSummary);
+        if (parsedSpec && specRes) {
+          setSpec({ path: specPath, content: specRes.content, parsed: parsedSpec });
+        }
+      } else {
+        // Spec file or scenario without response — spec only
+        const [parsedSpec, specRes] = await Promise.all([
+          api.parseSpec(specPath),
+          api.readSpec(specPath),
+        ]);
+        setSpec({ path: specPath, content: specRes.content, parsed: parsedSpec });
       }
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoadingScenario(false);
+      setLoadingSelection(false);
     }
   }
 
   async function reloadSpec() {
-    if (!scenario) return;
-    const specLookup = await api.findSpec(scenario.responsePath);
-    if (!specLookup?.found) {
-      setSpec(null);
-      return;
+    if (!selectedItem) return;
+    try {
+      const [parsedSpec, specRes] = await Promise.all([
+        api.parseSpec(selectedItem.specPath),
+        api.readSpec(selectedItem.specPath),
+      ]);
+      setSpec({ path: selectedItem.specPath, content: specRes.content, parsed: parsedSpec });
+    } catch (_) {
+      // ignore
     }
-    const parsed = await api.parseSpec(specLookup.path);
-    setSpec({ path: specLookup.path, content: specLookup.content, parsed });
   }
+
+  const hasSimData = Boolean(summary);
+  const tabs = hasSimData ? SIM_TABS : SPEC_ONLY_TABS;
+  // For scenarios without a response, use specPath#lineNumber as a synthetic selection key
+  const activePath = selectedItem?.responsePath
+    ?? (selectedItem?.lineNumber != null
+      ? `${selectedItem.specPath}#${selectedItem.lineNumber}`
+      : selectedItem?.specPath);
+
+  const title = selectedItem
+    ? (selectedItem.name ?? '').replaceAll('_', ' ')
+    : 'Select a scenario';
 
   return (
     <div className="app-shell">
-      <Sidebar tree={tree} loading={loadingTree} selectedPath={scenario?.responsePath} onSelect={loadScenario} />
+      <Sidebar tree={tree} loading={loadingTree} selectedPath={activePath} onSelect={loadSelection} />
       <main className="main-shell">
         <header className="topbar">
           <div>
             <div className="eyebrow">Vault Simulation Viewer</div>
-            <div className="title">{scenario ? scenario.name.replaceAll('_', ' ') : 'Select a scenario'}</div>
+            <div className="title">{title}</div>
           </div>
           <div className="badges">
             {summary && <span className="chip">{summary.events.length} events</span>}
             {summary && <span className="chip">{summary.accounts.length} accounts</span>}
-            {spec && <span className="chip chip-ok">spec loaded</span>}
+            {spec && !summary && <span className="chip chip-ok">spec only</span>}
+            {spec && summary && <span className="chip chip-ok">spec + response</span>}
           </div>
         </header>
 
-        {scenario && (
+        {selectedItem && (
           <nav className="tabs">
-            {TABS.map((tab) => (
+            {tabs.map((tab) => (
               <button
                 key={tab}
                 className={`tab ${activeTab === tab ? 'active' : ''}`}
@@ -94,15 +124,21 @@ export function App() {
 
         <section className="content">
           {error && <div className="notice error">{error}</div>}
-          {!scenario && !error && <EmptyState />}
-          {loadingScenario && <div className="notice">Loading scenario...</div>}
-          {summary && activeTab === 'timeline' && <Timeline events={summary.events} />}
-          {summary && activeTab === 'diagram' && <Diagram summary={summary} />}
-          {summary && activeTab === 'postings' && <Postings events={summary.events} />}
-          {summary && activeTab === 'accounts' && <Accounts summary={summary} spec={spec?.parsed} />}
-          {scenario && activeTab === 'spec' && (
-            <SpecView scenario={scenario} spec={spec} onReload={reloadSpec} onSpecSaved={reloadSpec} />
+          {!selectedItem && !error && <EmptyState />}
+          {loadingSelection && <div className="notice">Loading...</div>}
+          {activeTab === 'spec' && selectedItem && (
+            <SpecView
+              scenario={selectedItem}
+              spec={spec}
+              summary={summary}
+              onReload={reloadSpec}
+              onSpecSaved={reloadSpec}
+            />
           )}
+          {hasSimData && activeTab === 'timeline' && <Timeline events={summary.events} spec={spec?.parsed} />}
+          {hasSimData && activeTab === 'diagram' && <Diagram summary={summary} />}
+          {hasSimData && activeTab === 'postings' && <Postings events={summary.events} spec={spec?.parsed} />}
+          {hasSimData && activeTab === 'accounts' && <Accounts summary={summary} />}
         </section>
       </main>
     </div>
@@ -113,7 +149,7 @@ function EmptyState() {
   return (
     <div className="empty-state">
       <div className="empty-title">No scenario selected</div>
-      <div className="muted">Pick a response file from the sidebar.</div>
+      <div className="muted">Pick a spec file or scenario from the sidebar.</div>
     </div>
   );
 }
