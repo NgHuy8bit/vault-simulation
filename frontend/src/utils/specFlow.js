@@ -36,6 +36,7 @@ export function nodeTitle({ type, data }) {
   if (type === 'settlement') return `${data.amount}`;
   if (type === 'release') return data.client_transaction_id || 'Release';
   if (type === 'accepted' || type === 'rejected') return data.account_id || type;
+  if (type === 'other') return data.raw_text ? String(data.raw_text).slice(0, 40) : 'Free text';
   return type;
 }
 

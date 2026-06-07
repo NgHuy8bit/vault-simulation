@@ -7,6 +7,7 @@ import { Postings } from './components/Postings.jsx';
 import { Sidebar } from './components/Sidebar.jsx';
 import { SpecView } from './components/SpecView.jsx';
 import { Timeline } from './components/Timeline.jsx';
+import { findItemForRoute, normalizeTab, routeFromLocation, selectionKey, urlForSelection } from './utils/routes.js';
 
 const SIM_TABS = ['spec', 'timeline', 'diagram', 'postings', 'accounts'];
 const SPEC_ONLY_TABS = ['spec'];
@@ -20,6 +21,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState('spec');
   const [loadingSelection, setLoadingSelection] = useState(false);
   const [error, setError] = useState('');
+  const [routeVersion, setRouteVersion] = useState(0);
 
   useEffect(() => {
     api
@@ -29,13 +31,53 @@ export function App() {
       .finally(() => setLoadingTree(false));
   }, []);
 
-  async function loadSelection(item) {
+  useEffect(() => {
+    function handlePopState() {
+      setRouteVersion((value) => value + 1);
+    }
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (!tree) return;
+
+    const route = routeFromLocation();
+    if (!route) {
+      setSelectedItem(null);
+      setSummary(null);
+      setSpec(null);
+      setActiveTab('spec');
+      setError('');
+      return;
+    }
+
+    const item = findItemForRoute(tree, route);
+    if (!item) {
+      setSelectedItem(null);
+      setSummary(null);
+      setSpec(null);
+      setActiveTab('spec');
+      setError(`Cannot find selection from URL: ${window.location.pathname}`);
+      return;
+    }
+
+    loadSelection(item, { updateRoute: false, tab: route.tab });
+  }, [tree, routeVersion]);
+
+  async function loadSelection(item, options = {}) {
+    const tab = item.responsePath ? normalizeTab(options.tab) : 'spec';
     setSelectedItem(item);
     setSummary(null);
     setSpec(null);
     setError('');
     setLoadingSelection(true);
-    setActiveTab('spec');
+    setActiveTab(tab);
+
+    if (options.updateRoute !== false) {
+      window.history.pushState({}, '', urlForSelection(item, tab));
+    }
 
     try {
       const specPath = item.specPath;
@@ -66,6 +108,18 @@ export function App() {
     }
   }
 
+  function handleSelect(item) {
+    loadSelection(item, { updateRoute: true, tab: 'spec' });
+  }
+
+  function handleTabChange(tab) {
+    const nextTab = normalizeTab(tab);
+    setActiveTab(nextTab);
+    if (selectedItem) {
+      window.history.replaceState({}, '', urlForSelection(selectedItem, nextTab));
+    }
+  }
+
   async function reloadSpec() {
     if (!selectedItem) return;
     try {
@@ -81,11 +135,7 @@ export function App() {
 
   const hasSimData = Boolean(summary);
   const tabs = hasSimData ? SIM_TABS : SPEC_ONLY_TABS;
-  // For scenarios without a response, use specPath#lineNumber as a synthetic selection key
-  const activePath = selectedItem?.responsePath
-    ?? (selectedItem?.lineNumber != null
-      ? `${selectedItem.specPath}#${selectedItem.lineNumber}`
-      : selectedItem?.specPath);
+  const activePath = selectionKey(selectedItem);
 
   const title = selectedItem
     ? (selectedItem.name ?? '').replaceAll('_', ' ')
@@ -93,7 +143,7 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar tree={tree} loading={loadingTree} selectedPath={activePath} onSelect={loadSelection} />
+      <Sidebar tree={tree} loading={loadingTree} selectedPath={activePath} onSelect={handleSelect} />
       <main className="main-shell">
         <header className="topbar">
           <div>
@@ -114,7 +164,7 @@ export function App() {
               <button
                 key={tab}
                 className={`tab ${activeTab === tab ? 'active' : ''}`}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => handleTabChange(tab)}
               >
                 {tab}
               </button>

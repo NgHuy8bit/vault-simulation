@@ -17,10 +17,14 @@ def parse_spec_content(content: str) -> dict[str, Any]:
 
     for line in content.splitlines():
         if line.startswith("# ") and not line.startswith("## "):
+            if current_step is not None:
+                _trim_trailing_blank_source(current_step)
             title = line[2:].strip()
             continue
 
         if line.startswith("## "):
+            if current_step is not None:
+                _trim_trailing_blank_source(current_step)
             current = {"name": line[3:].strip(), "tags": [], "raw_steps": []}
             current_step = None
             scenarios.append(current)
@@ -28,27 +32,63 @@ def parse_spec_content(content: str) -> dict[str, Any]:
 
         stripped = line.strip()
         if stripped.startswith("tags:"):
+            if current_step is not None:
+                _trim_trailing_blank_source(current_step)
             tags = [tag.strip() for tag in stripped[5:].split(",") if tag.strip()]
             if current is None:
                 file_tags = tags
             else:
                 current["tags"] = tags
         elif line.startswith("* "):
-            current_step = {"text": line[2:].strip(), "table_rows": []}
+            if current_step is not None:
+                _trim_trailing_blank_source(current_step)
+            current_step = {"text": line[2:].strip(), "table_rows": [], "source_lines": [line]}
             target_steps().append(current_step)
-        elif stripped.startswith("|") and current_step is not None:
+        elif stripped.startswith("|") and current_step is not None and not current_step.get("free_text"):
             current_step["table_rows"].append(stripped)
+            current_step.setdefault("source_lines", []).append(line)
+        elif stripped == "" and current_step is not None:
+            current_step.setdefault("source_lines", []).append(line)
+        elif stripped and not stripped.startswith("#"):
+            # Free-text annotation line — merge into existing free-text block or start new one.
+            # Merging preserves blank lines between consecutive free-text lines via source_lines.
+            if current_step is not None and not current_step.get("free_text"):
+                _trim_trailing_blank_source(current_step)
+                current_step = None
+            if current_step is not None and current_step.get("free_text"):
+                current_step["source_lines"].append(line)
+            else:
+                free_step = {"text": "", "table_rows": [], "free_text": stripped, "source_lines": [line]}
+                target_steps().append(free_step)
+                current_step = free_step
+
+    def _parse_raw_step(step: dict[str, Any]) -> dict[str, Any]:
+        _trim_trailing_blank_source(step)
+        source_lines = step.get("source_lines") or []
+        if step.get("free_text"):
+            return {
+                "type": "other",
+                "raw": "",
+                "data": {
+                    "raw_text": step["free_text"],
+                    "is_free_text": True,
+                    "_source_lines": source_lines,
+                },
+            }
+        parsed_step = _parse_step(step["text"], step["table_rows"])
+        parsed_step.setdefault("data", {})["_source_lines"] = source_lines
+        return parsed_step
 
     parsed_scenarios = [
         {
             "name": scenario["name"],
             "tags": scenario["tags"],
-            "steps": [_parse_step(step["text"], step["table_rows"]) for step in scenario["raw_steps"]],
+            "steps": [_parse_raw_step(step) for step in scenario["raw_steps"]],
         }
         for scenario in scenarios
     ]
 
-    setup_steps = [_parse_step(step["text"], step["table_rows"]) for step in setup_raw]
+    setup_steps = [_parse_raw_step(step) for step in setup_raw]
     scenario_list = parsed_scenarios
     if len(parsed_scenarios) > 1:
         first = parsed_scenarios[0]
@@ -63,6 +103,14 @@ def parse_spec_content(content: str) -> dict[str, Any]:
         "setup_steps": setup_steps,
         "scenarios": scenario_list,
     }
+
+
+def _trim_trailing_blank_source(step: dict[str, Any]) -> None:
+    source_lines = step.get("source_lines")
+    if not source_lines:
+        return
+    while source_lines and not source_lines[-1].strip():
+        source_lines.pop()
 
 
 def _classify_step(text: str) -> str:
@@ -376,7 +424,7 @@ def _parse_balance_check(text: str, table: list[dict[str, str]]) -> dict[str, An
             "denomination": row.get("denomination", denomination),
             "phase": row.get("phase", "POSTING_PHASE_COMMITTED"),
             "asset": row.get("asset", "COMMERCIAL_BANK_MONEY"),
-            "balance": _clean_amount(row.get("balance", "0")),
+            "balance": row.get("balance", "0"),
         })
     rows.sort(key=lambda item: item.get("timestamp", ""))
     return {"denomination": denomination, "rows": rows}
@@ -393,7 +441,7 @@ def _parse_balance_check_multi(text: str, table: list[dict[str, str]]) -> dict[s
             "denomination": row.get("denomination", denomination),
             "phase": row.get("phase", "POSTING_PHASE_COMMITTED"),
             "asset": row.get("asset", "COMMERCIAL_BANK_MONEY"),
-            "balance": _clean_amount(row.get("balance", "0")),
+            "balance": row.get("balance", "0"),
         })
     rows.sort(key=lambda item: item.get("timestamp", ""))
     return {"denomination": denomination, "rows": rows}

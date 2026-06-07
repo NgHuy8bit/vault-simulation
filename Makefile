@@ -70,7 +70,7 @@ build: setup-fe
 
 test: setup
 	$(PYTHON_BIN) -m compileall -q backend/app
-	cd backend && ../$(PYTHON_BIN) -c "from app.main import app; print(app.title)"
+	PYTHONPATH=backend $(PYTHON_BIN) -c "from app.main import app; print(app.title)"
 	$(NPM) --prefix frontend run build
 
 legacy:

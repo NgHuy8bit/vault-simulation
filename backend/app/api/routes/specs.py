@@ -49,6 +49,9 @@ def save_spec(payload: SaveSpecRequest):
         if content is None:
             raise HTTPException(status_code=400, detail="Missing steps_json or raw_content")
 
+    if target.exists() and target.read_text("utf-8") == content:
+        return {"ok": True, "path": rel_path, "written": False}
+
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, "utf-8")
-    return {"ok": True, "path": rel_path}
+    return {"ok": True, "path": rel_path, "written": True}

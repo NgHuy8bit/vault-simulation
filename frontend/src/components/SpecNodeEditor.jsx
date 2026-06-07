@@ -82,6 +82,7 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
   const [path, setPath] = useState(spec.path);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [visualDirty, setVisualDirty] = useState(false);
 
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [inspectingNodeId, setInspectingNodeId] = useState(null);
@@ -122,6 +123,7 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
 
   // After dragging, recompute edges to match new visual order
   const onNodeDragStop = useCallback(() => {
+    setVisualDirty(true);
     setNodes((nds) => {
       const sorted = [...nds].sort((a, b) => {
         if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
@@ -139,6 +141,7 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
   }, [setEdges]);
 
   function addNode(type) {
+    setVisualDirty(true);
     const id = newId();
     let targetX = 50;
     let targetY = 50;
@@ -181,6 +184,7 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
     const afterNode = nodes.find((n) => n.id === afterNodeId);
     if (!afterNode) return addNode(type);
 
+    setVisualDirty(true);
     const id = newId();
     const data = defaultData(type);
     const newX = afterNode.position.x + 320;
@@ -237,16 +241,18 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
 
   function updateSelected(newData) {
     if (!inspectingNodeId) return;
+    setVisualDirty(true);
     setNodes((nds) =>
       nds.map((node) => {
         if (node.id !== inspectingNodeId) return node;
+        const nextData = { ...newData, _dirty: true };
         return {
           ...node,
           data: {
             ...node.data,
-            title: nodeTitle({ type: node.data.type, data: newData }),
-            subtitle: nodeSubtitle({ type: node.data.type, data: newData }),
-            _rawData: newData,
+            title: nodeTitle({ type: node.data.type, data: nextData }),
+            subtitle: nodeSubtitle({ type: node.data.type, data: nextData }),
+            _rawData: nextData,
           },
         };
       }),
@@ -257,6 +263,7 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
     if (!inspectingNodeId) return;
     const node = nodes.find((n) => n.id === inspectingNodeId);
     if (!window.confirm(`Delete "${node?.data?.type || 'node'}"? This cannot be undone.`)) return;
+    setVisualDirty(true);
     setNodes((nds) => nds.filter((n) => n.id !== inspectingNodeId));
     setEdges((eds) =>
       eds.filter((e) => e.source !== inspectingNodeId && e.target !== inspectingNodeId),
@@ -268,8 +275,21 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
     setSaving(true);
     setToast(null);
     try {
+      if (editMode === 'source' && path === spec.path && sourceContent === (spec.content || '')) {
+        setToast({ type: 'success', message: 'No changes to save.' });
+        await onSaved();
+        return;
+      }
+      if (editMode === 'visual' && path === spec.path && !visualDirty) {
+        setToast({ type: 'success', message: 'No changes to save.' });
+        await onSaved();
+        return;
+      }
+
       if (editMode === 'source') {
         await api.saveSpec({ path, raw_content: sourceContent });
+      } else if (!visualDirty) {
+        await api.saveSpec({ path, raw_content: spec.content || '' });
       } else {
         await api.saveSpec({ path, steps_json: flowToSpec(nodes, title, fileTags) });
       }
@@ -289,11 +309,24 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
       <div className="node-editor-top">
         <label>
           Title
-          <input value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setVisualDirty(true);
+            }}
+          />
         </label>
         <label>
           Tags
-          <input value={fileTags} onChange={(e) => setFileTags(e.target.value)} placeholder="tag1, tag2" />
+          <input
+            value={fileTags}
+            onChange={(e) => {
+              setFileTags(e.target.value);
+              setVisualDirty(true);
+            }}
+            placeholder="tag1, tag2"
+          />
         </label>
         <label className="wide-field">
           File path
@@ -336,7 +369,12 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
               onConnect={onConnect}
               onNodeClick={onNodeClick}
               onNodeDragStop={onNodeDragStop}
+              onSelectionDragStop={onNodeDragStop}
               nodeTypes={nodeTypes}
+              deleteKeyCode={null}
+              selectionOnDrag
+              panOnDrag={[2]}
+              panOnScroll
               fitView
               fitViewOptions={{ padding: 0.2 }}
             >
@@ -362,7 +400,7 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
           )}
 
           {inspectingNode && (
-            <Modal title={`Edit: ${inspectingNode.data.type}`} onClose={() => setInspectingNodeId(null)}>
+            <Modal title={`Edit: ${inspectingNode.data.type}`} onClose={() => setInspectingNodeId(null)} wide>
               <div className="inspector-modal-content">
                 <StepInspector
                   node={{ type: inspectingNode.data.type, data: inspectingNode.data._rawData }}
@@ -468,4 +506,3 @@ function defaultData(type) {
     batch_detail_check: { timestamp: `${day}T10:00:00`, rows: [{ key: '', value: '' }] },
   }[type];
 }
-

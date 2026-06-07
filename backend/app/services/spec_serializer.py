@@ -1,6 +1,20 @@
 from typing import Any
 
 
+def _is_free_text_step(step: dict[str, Any]) -> bool:
+    return step.get("type") == "other" and bool(step.get("data", {}).get("is_free_text"))
+
+
+def _serialize_steps_to(steps: list[dict[str, Any]], lines: list[str]) -> None:
+    for i, step in enumerate(steps):
+        lines.extend(_serialize_step(step))
+        next_step = steps[i + 1] if i + 1 < len(steps) else None
+        # Skip blank line between two consecutive free-text steps (preserve original spacing)
+        if _is_free_text_step(step) and next_step is not None and _is_free_text_step(next_step):
+            continue
+        lines.append("")
+
+
 def serialize_spec(spec_data: dict[str, Any]) -> str:
     lines = [f'# {spec_data.get("title") or "New Spec"}', ""]
 
@@ -8,18 +22,14 @@ def serialize_spec(spec_data: dict[str, Any]) -> str:
     if file_tags:
         lines.extend(["tags: " + ", ".join(file_tags), ""])
 
-    for step in spec_data.get("setup_steps") or []:
-        lines.extend(_serialize_step(step))
-        lines.append("")
+    _serialize_steps_to(spec_data.get("setup_steps") or [], lines)
 
     for scenario in spec_data.get("scenarios") or []:
         lines.extend([f'## {scenario.get("name") or "Scenario"}', ""])
         tags = scenario.get("tags") or []
         if tags:
             lines.extend(["tags: " + ", ".join(tags), ""])
-        for step in scenario.get("steps") or []:
-            lines.extend(_serialize_step(step))
-            lines.append("")
+        _serialize_steps_to(scenario.get("steps") or [], lines)
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -27,6 +37,9 @@ def serialize_spec(spec_data: dict[str, Any]) -> str:
 def _serialize_step(step: dict[str, Any]) -> list[str]:
     step_type = step.get("type", "other")
     data = step.get("data") or {}
+    source_lines = data.get("_source_lines")
+    if source_lines and not data.get("_dirty"):
+        return list(source_lines)
 
     if step_type == "config":
         return [_serialize_config(data)]
@@ -158,7 +171,11 @@ def _serialize_step(step: dict[str, Any]) -> list[str]:
         ]
 
     raw = step.get("raw") or data.get("raw_text") or ""
-    return [raw if raw.startswith("* ") else f"* {raw}"] if raw else []
+    if not raw:
+        return []
+    if data.get("is_free_text"):
+        return [raw]
+    return [raw if raw.startswith("* ") else f"* {raw}"]
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
