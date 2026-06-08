@@ -71,7 +71,7 @@ export function specToFlow(parsed) {
   let currentX = 50;
   let lastNodeId = null;
 
-  function pushNode(type, data, isNewRow = false) {
+  function pushNode(type, data, isNewRow = false, matchText = null) {
     if (isNewRow) {
       currentY += 150;
       currentX = 50;
@@ -88,6 +88,10 @@ export function specToFlow(parsed) {
         title: nodeTitle({ type, data }),
         subtitle: nodeSubtitle({ type, data }),
         _rawData: clone(data),
+        // Raw gauge step/scenario text — used to correlate this node with
+        // live run progress and json-report results (which only carry text,
+        // not node IDs) so the diagram can light up as execution proceeds.
+        _matchText: matchText,
       },
     });
 
@@ -99,12 +103,12 @@ export function specToFlow(parsed) {
   }
 
   for (const step of parsed.setup_steps || []) {
-    pushNode(step.type, step.data, false);
+    pushNode(step.type, step.data, false, step.raw || null);
   }
   for (const scenario of parsed.scenarios || []) {
-    pushNode('scenario', { name: scenario.name, tags: (scenario.tags || []).join(', ') }, true);
+    pushNode('scenario', { name: scenario.name, tags: (scenario.tags || []).join(', ') }, true, scenario.name || null);
     for (const step of scenario.steps || []) {
-      pushNode(step.type, step.data, false);
+      pushNode(step.type, step.data, false, step.raw || null);
     }
   }
   return { nodes, edges };

@@ -2,9 +2,10 @@ import { Handle, Position } from '@xyflow/react';
 
 export function SpecCustomNode({ data, isConnectable }) {
   const isScenario = data.type === 'scenario';
+  const runStatusClass = data.runStatus ? `run-status-${data.runStatus}` : '';
 
   return (
-    <div className={`flow-node custom-flow-node ${isScenario ? 'scenario-node' : ''}`}>
+    <div className={`flow-node custom-flow-node ${isScenario ? 'scenario-node' : ''} ${runStatusClass}`}>
       <Handle
         type="target"
         position={Position.Left}
