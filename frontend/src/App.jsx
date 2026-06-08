@@ -24,6 +24,7 @@ export function App() {
   const [error, setError] = useState('');
   const [routeVersion, setRouteVersion] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
 
   useEffect(() => {
     api
@@ -144,13 +145,24 @@ export function App() {
     : 'Select a scenario';
 
   return (
-    <div className="app-shell">
-      <Sidebar tree={tree} loading={loadingTree} selectedPath={activePath} onSelect={handleSelect} />
+    <div className={`app-shell${sidebarHidden ? ' sidebar-hidden' : ''}`}>
+      {!sidebarHidden && (
+        <Sidebar tree={tree} loading={loadingTree} selectedPath={activePath} onSelect={handleSelect} />
+      )}
       <main className="main-shell">
         <header className="topbar">
-          <div>
-            <div className="eyebrow">Vault Simulation Viewer</div>
-            <div className="title">{title}</div>
+          <div className="topbar-left">
+            <button
+              className="sidebar-toggle-btn"
+              title={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'}
+              onClick={() => setSidebarHidden((v) => !v)}
+            >
+              {sidebarHidden ? '▶' : '◀'}
+            </button>
+            <div>
+              <div className="eyebrow">Vault Simulation Viewer</div>
+              <div className="title">{title}</div>
+            </div>
           </div>
           <div className="badges">
             {summary && <span className="chip">{summary.events.length} events</span>}

@@ -34,15 +34,27 @@ function parseGaugeOutput(lines) {
   return result;
 }
 
-// Build a map of { scenarioName: lineNumber (1-indexed) } from raw spec content
-function extractScenarioLines(content) {
-  if (!content) return {};
-  const map = {};
+// Build an ORDERED list of `## heading` line numbers (1-indexed) from raw
+// spec content — one entry per scenario, in source order.
+//
+// Deliberately NOT a { name: lineNumber } map: data-driven/parameterized specs
+// routinely produce multiple scenarios with the *identical* heading text and
+// only differing tags (e.g. "Update both last due principal date and maturity
+// date" @AC4 vs. the same heading @AC8 — visible in the sidebar as repeated
+// "Early repayment during cycle..." entries). A name-keyed map collapses those
+// duplicates, so every node with that name resolves to the SAME (last) line —
+// clicking "Run this scenario" on the first one would silently run the last
+// one instead (gauge runs the correct line, the log is "right", but it's not
+// the scenario the user clicked). Matching by source-order position instead —
+// paired with each node's `scenarioIndex` from `specToFlow` — is unambiguous
+// regardless of duplicate names.
+function extractScenarioLineList(content) {
+  if (!content) return [];
+  const lines = [];
   content.split('\n').forEach((line, i) => {
-    const m = line.match(/^##\s+(.+?)(?:\s+@\S+)*\s*$/);
-    if (m) map[m[1].trim()] = i + 1;
+    if (/^##\s+(.+?)(?:\s+@\S+)*\s*$/.test(line)) lines.push(i + 1);
   });
-  return map;
+  return lines;
 }
 
 // Build an ordered list of { text, line (1-indexed) } for every `* step` line
@@ -79,7 +91,7 @@ function findStepLine(stepLines, stepText) {
 
 // ── Run output overlay ────────────────────────────────────────────────────
 
-function RunOutputPanel({ lines, status, progress, result, specPath, specScenarios, stepLines, onJumpToLine, onClose }) {
+function RunOutputPanel({ lines, status, progress, result, specPath, specScenarios, stepLines, onJumpToLine, onClose, onCollapse }) {
   const bodyRef = useRef(null);
   const logRef = useRef(null);
   const [showLog, setShowLog] = useState(false);
@@ -133,11 +145,10 @@ function RunOutputPanel({ lines, status, progress, result, specPath, specScenari
   }, [result]);
 
   return (
-    <div className={`run-output-panel${showLog ? ' expanded' : ''}`}>
+    <div className={`run-output-drawer${showLog ? ' wide' : ''}`}>
       <div className="run-output-header">
         <span className={`run-status-indicator ${status}`} />
         <span className="run-output-title">{statusLabel}</span>
-        <span className="run-output-path muted">{specPath}</span>
         <button
           className={`run-log-toggle${showLog ? ' active' : ''}`}
           onClick={() => setShowLog((v) => !v)}
@@ -145,8 +156,11 @@ function RunOutputPanel({ lines, status, progress, result, specPath, specScenari
         >
           Log
         </button>
+        <div className="spacer" />
+        <button className="run-output-close" onClick={onCollapse} title="Collapse panel">⏵</button>
         <button className="run-output-close" onClick={onClose} title="Close">✕</button>
       </div>
+      <div className="run-output-path muted">{specPath}</div>
 
       {/* Live "where are we" breadcrumb — driven by --verbose console parsing
           on the backend. Best-effort: just doesn't update if gauge changes
@@ -310,10 +324,17 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
   const [runStatus, setRunStatus] = useState(null);
   const [runProgress, setRunProgress] = useState(null); // { spec, scenario, step }
   const [runResult, setRunResult] = useState(null);     // structured json-report tree
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [runTargetScenarioIndex, setRunTargetScenarioIndex] = useState(null); // null = "Run All"
   const [highlightLine, setHighlightLine] = useState(null);
   const sourceLineRefs = useRef([]);
 
-  const scenarioLineMap = useMemo(() => extractScenarioLines(spec?.content), [spec?.content]);
+  // Progressive parse of the raw streamed console lines — this is the same
+  // mechanism that already animates the scenario tick-list one row at a
+  // time, so it's the most reliable "what has finished so far" live source.
+  const parsedRunOutput = useMemo(() => parseGaugeOutput(runLines || []), [runLines]);
+
+  const scenarioLineList = useMemo(() => extractScenarioLineList(spec?.content), [spec?.content]);
   const stepLines = useMemo(() => extractStepLines(spec?.content), [spec?.content]);
   const sourceLines = useMemo(() => (spec?.content ? spec.content.split('\n') : []), [spec?.content]);
 
@@ -329,6 +350,13 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
 
   async function handleRun(lineNumber = null) {
     if (!spec || runStatus === 'running') return;
+    setDrawerOpen(true);
+    // Remember WHICH scenario was targeted (by its source-order index, the
+    // only collision-free key — see extractScenarioLineList) so the live
+    // "while running" approximation can light up that exact node instead of
+    // guessing positionally from the console output, which only ever lists
+    // the scenario(s) that actually ran — wrong for single-scenario runs.
+    setRunTargetScenarioIndex(lineNumber != null ? scenarioLineList.indexOf(lineNumber) : null);
     setRunLines([]);
     setRunStatus('running');
     setRunProgress(null);
@@ -379,11 +407,11 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
 
   return (
     <div className="tab-page spec-page">
-      <div className="toolbar">
-        <span className="muted" style={{ fontSize: '12px', fontFamily: 'ui-monospace, Consolas, monospace' }}>
-          {spec.path}
-        </span>
-        <div className="spacer" />
+      <div className="spec-path-bar">
+        <span className="spec-path-label muted">SPEC FILE</span>
+        <span className="spec-path-value">{spec.path}</span>
+      </div>
+      <div className="toolbar spec-toolbar">
         <button className={`filter ${mode === 'visual' ? 'active' : ''}`} onClick={() => setMode('visual')}>
           Visual
         </button>
@@ -391,6 +419,16 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
           Source
         </button>
         <button className="filter" onClick={onReload}>Reload</button>
+        <div className="spacer" />
+        {runLines !== null && (
+          <button
+            className={`filter ${drawerOpen ? 'active' : ''}`}
+            onClick={() => setDrawerOpen((v) => !v)}
+            title="Toggle run results panel"
+          >
+            {drawerOpen ? 'Hide results ▸' : '◂ Show results'}
+          </button>
+        )}
         <button
           className={`run-btn ${runStatus === 'running' ? 'running' : ''}`}
           onClick={() => handleRun()}
@@ -402,44 +440,50 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
         <button className="primary" onClick={() => setEditing(true)}>Edit spec</button>
       </div>
 
-      {mode === 'source' ? (
-        <pre className="source-box">
-          {sourceLines.map((line, i) => (
-            <div
-              key={i}
-              ref={(el) => { sourceLineRefs.current[i] = el; }}
-              className={`source-line${highlightLine === i + 1 ? ' highlighted' : ''}`}
-            >
-              <span className="source-line-no muted">{i + 1}</span>
-              <span className="source-line-text">{line}</span>
-            </div>
-          ))}
-        </pre>
-      ) : (
-        <SpecVisual
-          parsed={spec.parsed}
-          scenarioLineMap={scenarioLineMap}
-          onRunScenario={handleRun}
-          runDisabled={runStatus === 'running'}
-          runStatus={runStatus}
-          runProgress={runProgress}
-          runResult={runResult}
-        />
-      )}
+      <div className="spec-body">
+        <div className="spec-main">
+          {mode === 'source' ? (
+            <pre className="source-box">
+              {sourceLines.map((line, i) => (
+                <div
+                  key={i}
+                  ref={(el) => { sourceLineRefs.current[i] = el; }}
+                  className={`source-line${highlightLine === i + 1 ? ' highlighted' : ''}`}
+                >
+                  <span className="source-line-no muted">{i + 1}</span>
+                  <span className="source-line-text">{line}</span>
+                </div>
+              ))}
+            </pre>
+          ) : (
+            <SpecVisual
+              parsed={spec.parsed}
+              scenarioLineList={scenarioLineList}
+              onRunScenario={handleRun}
+              runDisabled={runStatus === 'running'}
+              runStatus={runStatus}
+              parsedRunOutput={parsedRunOutput}
+              runResult={runResult}
+              runTargetScenarioIndex={runTargetScenarioIndex}
+            />
+          )}
+        </div>
 
-      {runLines !== null && (
-        <RunOutputPanel
-          lines={runLines}
-          status={runStatus}
-          progress={runProgress}
-          result={runResult}
-          specPath={spec.path}
-          specScenarios={spec.parsed?.scenarios}
-          stepLines={stepLines}
-          onJumpToLine={jumpToLine}
-          onClose={() => { setRunLines(null); setRunStatus(null); setRunProgress(null); setRunResult(null); }}
-        />
-      )}
+        {runLines !== null && drawerOpen && (
+          <RunOutputPanel
+            lines={runLines}
+            status={runStatus}
+            progress={runProgress}
+            result={runResult}
+            specPath={spec.path}
+            specScenarios={spec.parsed?.scenarios}
+            stepLines={stepLines}
+            onJumpToLine={jumpToLine}
+            onClose={() => { setRunLines(null); setRunStatus(null); setRunProgress(null); setRunResult(null); setDrawerOpen(false); }}
+            onCollapse={() => setDrawerOpen(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -453,96 +497,259 @@ function _textsLooselyMatch(a, b) {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
-// Walk the flow nodes in source order and assign each a live run status —
-// 'running' | 'passed' | 'failed' — by correlating its `_matchText` (raw
-// gauge step/scenario text) against:
-//   - runProgress: the live "currently executing" breadcrumb (while running)
-//   - runResult:   the authoritative json-report tree (once finished)
-// Nodes with no correlation get no status (rendered unchanged).
-function buildNodeStatusMap(nodes, runStatus, runProgress, runResult) {
-  const map = {};
-  if (!runStatus) return map;
+// ── Pinpointing balance-check failures to their exact node ────────────────
+//
+// The framework runs balance assertions as part of the "run simulation" step
+// but gauge surfaces their failures via `afterScenarioHookFailure` — i.e.
+// attached to the *scenario*, not to any step. That leaves the diagram unable
+// to point at "this node" using status alone. However, the assertion message
+// itself is highly structured ("At <ts> check the balance of account <id>,
+// address <addr>, denomination <denom>, asset <asset> ..."), and every
+// `balance_check`/`balance_check_multi` node carries the exact same fields in
+// its parsed `_rawData.rows` (see spec_parser._parse_balance_check*). So we
+// can regex the failure message and cross-reference it against each
+// candidate node's rows to land on the precise node — and even the precise
+// row — that the assertion was checking.
 
+const _BALANCE_FAILURE_RE =
+  /At\s+(\S+(?:\s+\S+)?)\s+check the balance of account\s+([^\s,]+),\s*address\s+([^\s,]+),\s*denomination\s+([^\s,]+),\s*asset\s+([^\s,.]+)/;
+
+function _normalizeTimestamp(ts) {
+  if (!ts) return '';
+  // Spec tables use "2024-09-15T01:00:00"; assertion messages use
+  // "2024-09-15 01:00:00+07:00" — collapse both to "date time" with no tz.
+  return String(ts).replace('T', ' ').replace(/\s*[+-]\d{2}:?\d{2}$|Z$/, '').trim();
+}
+
+function parseBalanceCheckFailure(message) {
+  const m = (message || '').match(_BALANCE_FAILURE_RE);
+  if (!m) return null;
+  return { timestamp: m[1].trim(), account_id: m[2], address: m[3], denomination: m[4], asset: m[5] };
+}
+
+// Search the scenario's own step nodes (never across scenarios — a failure
+// belongs to the run that produced it) for the balance-check row that the
+// failure message describes.
+function findBalanceCheckMatch(stepNodes, failure) {
+  if (!failure) return null;
+  const wantTs = _normalizeTimestamp(failure.timestamp);
+  for (const node of stepNodes) {
+    if (node.data.type !== 'balance_check' && node.data.type !== 'balance_check_multi') continue;
+    const rows = node.data._rawData?.rows || [];
+    const rowIndex = rows.findIndex((row) =>
+      row.account_id === failure.account_id &&
+      row.address === failure.address &&
+      row.denomination === failure.denomination &&
+      row.asset === failure.asset &&
+      _normalizeTimestamp(row.timestamp) === wantTs
+    );
+    if (rowIndex !== -1) return { node, rowIndex, totalRows: rows.length };
+  }
+  return null;
+}
+
+const _statusOf = (gaugeStatus) => {
+  if (gaugeStatus === 'passed') return 'passed';
+  if (gaugeStatus === 'failed') return 'failed';
+  return null;
+};
+
+// Precise mapping (post-run): correlates each node's `_matchText` against the
+// authoritative gauge json-report tree (exact step text + pass/fail). This is
+// only available once the run finishes and gauge has (re)written result.json.
+// Returns both the status per node and — for failed nodes — the assertion
+// message straight from the json-report, so the diagram can surface "what
+// broke" without the user having to dig through the raw log.
+function buildPreciseStatusMap(nodes, runResult) {
+  const statusMap = {};
+  const errorMap = {};
   const resultScenarios = [];
-  if (runResult?.specs) {
-    for (const spec of runResult.specs) {
-      for (const sc of spec.scenarios) resultScenarios.push(sc);
+  for (const spec of runResult?.specs || []) {
+    for (const sc of spec.scenarios) resultScenarios.push(sc);
+  }
+
+  // Group the diagram's flat node list into per-scenario blocks (a `scenario`
+  // header followed by its step nodes) so each block can be matched against
+  // exactly one result scenario — critical for partial runs (e.g. running a
+  // single scenario by line number), where `resultScenarios` only has ONE
+  // entry: a loose substring match against every block would happily match
+  // several similarly-named scenarios (e.g. "Update X" vs "Update X non-...")
+  // and light all of them up red. Matching is greedy and consumes each result
+  // scenario at most once, with an exact-heading match always preferred over
+  // a loose one, so unrelated/un-run scenarios are left with no status at all.
+  const blocks = [];
+  let currentBlock = null;
+  for (const node of nodes) {
+    if (node.data.type === 'scenario') {
+      currentBlock = { scenarioNode: node, stepNodes: [] };
+      blocks.push(currentBlock);
+    } else if (currentBlock) {
+      currentBlock.stepNodes.push(node);
     }
   }
-  const statusOf = (gaugeStatus) => {
-    if (gaugeStatus === 'passed') return 'passed';
-    if (gaugeStatus === 'failed') return 'failed';
-    return null;
-  };
 
-  let activeScenarioResult = null;
+  const usedResultIndex = new Set();
+  function consumeMatchingResult(matchText) {
+    const needle = _normalizeStepText(matchText);
+    if (!needle) return null;
+    let idx = resultScenarios.findIndex((sc, i) => !usedResultIndex.has(i) && _normalizeStepText(sc.heading) === needle);
+    if (idx === -1) {
+      idx = resultScenarios.findIndex((sc, i) => !usedResultIndex.has(i) && _textsLooselyMatch(sc.heading, matchText));
+    }
+    if (idx === -1) return null;
+    usedResultIndex.add(idx);
+    return resultScenarios[idx];
+  }
+
+  for (const block of blocks) {
+    const matchText = block.scenarioNode.data._matchText || block.scenarioNode.data.title;
+    const scenarioResult = consumeMatchingResult(matchText);
+    if (!scenarioResult) continue;
+
+    const st = _statusOf(scenarioResult.status);
+    if (st) statusMap[block.scenarioNode.id] = st;
+
+    for (const stepNode of block.stepNodes) {
+      const stepMatchText = stepNode.data._matchText || stepNode.data.title;
+      const stepResult = scenarioResult.steps.find((st2) => _textsLooselyMatch(st2.text, stepMatchText));
+      const sst = stepResult && _statusOf(stepResult.status);
+      if (sst) statusMap[stepNode.id] = sst;
+      if (sst === 'failed' && stepResult?.error_message) errorMap[stepNode.id] = stepResult.error_message;
+    }
+
+    // Hook-level failure (gauge attaches balance/teardown assertions to the
+    // scenario, not a step) — try to resolve it down to the exact
+    // balance-check node + row it was actually checking; only fall back to
+    // pinning the message on the scenario header when that's not possible.
+    if (st === 'failed' && scenarioResult.hook_failure) {
+      const message = scenarioResult.hook_failure.error_message;
+      const failure = parseBalanceCheckFailure(message);
+      const match = failure && findBalanceCheckMatch(block.stepNodes, failure);
+      if (match) {
+        statusMap[match.node.id] = 'failed';
+        errorMap[match.node.id] = `Row ${match.rowIndex + 1}/${match.totalRows} — ${message}`;
+      } else {
+        errorMap[block.scenarioNode.id] = message;
+      }
+    }
+  }
+  return { statusMap, errorMap };
+}
+
+// Live approximation (while running): gauge's console reporter buffers a
+// scenario's entire output (heading + every step's tick/cross) and only
+// flushes it to stdout once that scenario finishes — there is no real-time
+// per-step signal to read. What DOES arrive progressively, scenario by
+// scenario, is the `## <heading>  ✔ ✔ ✗ ...` summary line — which is exactly
+// what `parseGaugeOutput` already extracts into `parsed.scenarios` (that's
+// how the existing tick-list above animates in). So: the Nth scenario block
+// lights up amber as soon as scenario N-1's summary line has streamed in,
+// and flips to green/red using that same line's pass/fail counts — at
+// scenario-block granularity, which is the finest grain gauge actually
+// reports live. The precise per-step colors land once `runResult` arrives.
+// `targetScenarioIndex` is the source-order index of the scenario the user
+// actually asked gauge to run (null = "Run All"). The console only ever
+// reports the scenario(s) that ran — for a single-scenario run that's a
+// one-element list — so positionally mapping "Nth reported" to "Nth node in
+// the diagram" is wrong whenever the targeted scenario isn't the first one.
+// When we know the target, light up only that scenario's block directly from
+// the lone reported entry instead of guessing by position.
+function buildLiveStatusMap(nodes, runStatus, parsedOutput, targetScenarioIndex) {
+  const map = {};
+  const completed = parsedOutput?.scenarios || [];
+  let scenarioIndex = -1;
+  let blockActive = false;
+  let blockStatus = null;
 
   for (const node of nodes) {
-    const matchText = node.data._matchText || node.data.title;
-
     if (node.data.type === 'scenario') {
-      activeScenarioResult = resultScenarios.find((sc) => _textsLooselyMatch(sc.heading, matchText)) || null;
-      if (activeScenarioResult) {
-        const st = statusOf(activeScenarioResult.status);
-        if (st) map[node.id] = st;
-      } else if (
-        runStatus === 'running' &&
-        runProgress?.scenario &&
-        _textsLooselyMatch(runProgress.scenario, matchText)
-      ) {
-        map[node.id] = 'running';
+      scenarioIndex += 1;
+      if (targetScenarioIndex != null) {
+        blockActive = scenarioIndex === targetScenarioIndex;
+        if (blockActive) {
+          if (completed.length > 0) {
+            blockStatus = completed[0].failed > 0 ? 'failed' : 'passed';
+          } else if (runStatus === 'running') {
+            blockStatus = 'running';
+          } else {
+            blockStatus = null;
+          }
+        } else {
+          blockStatus = null;
+        }
+      } else {
+        blockActive = true;
+        if (scenarioIndex < completed.length) {
+          blockStatus = completed[scenarioIndex].failed > 0 ? 'failed' : 'passed';
+        } else if (scenarioIndex === completed.length && runStatus === 'running') {
+          blockStatus = 'running';
+        } else {
+          blockStatus = null;
+        }
       }
-      continue;
     }
-
-    if (activeScenarioResult) {
-      const stepResult = activeScenarioResult.steps.find((st) => _textsLooselyMatch(st.text, matchText));
-      if (stepResult) {
-        const st = statusOf(stepResult.status);
-        if (st) map[node.id] = st;
-      }
-    } else if (
-      runStatus === 'running' &&
-      runProgress?.step &&
-      _textsLooselyMatch(runProgress.step, matchText)
-    ) {
-      map[node.id] = 'running';
-    }
+    if (blockActive && blockStatus) map[node.id] = blockStatus;
   }
   return map;
 }
 
-function SpecVisual({ parsed, scenarioLineMap, onRunScenario, runDisabled, runStatus, runProgress, runResult }) {
+// Walk the flow nodes and assign each a live run status — 'running' |
+// 'passed' | 'failed' — preferring the precise per-step json-report mapping
+// once it's available, and falling back to the scenario-block-level live
+// approximation while the run is still in progress. Also returns an
+// `errorMap` of nodeId → assertion message for nodes that failed, so the
+// diagram itself can show "what broke" inline.
+function buildNodeStatusMap(nodes, runStatus, parsedOutput, runResult, targetScenarioIndex) {
+  if (!runStatus) return { statusMap: {}, errorMap: {} };
+  if (runResult) return buildPreciseStatusMap(nodes, runResult);
+  return { statusMap: buildLiveStatusMap(nodes, runStatus, parsedOutput, targetScenarioIndex), errorMap: {} };
+}
+
+function SpecVisual({ parsed, scenarioLineList, onRunScenario, runDisabled, runStatus, parsedRunOutput, runResult, runTargetScenarioIndex }) {
   const [selectedNode, setSelectedNode] = useState(null);
   const { nodes: rawNodes, edges } = useMemo(() => specToFlow(parsed), [parsed]);
 
-  const nodeStatusMap = useMemo(
-    () => buildNodeStatusMap(rawNodes, runStatus, runProgress, runResult),
-    [rawNodes, runStatus, runProgress, runResult]
+  const { statusMap: nodeStatusMap, errorMap: nodeErrorMap } = useMemo(
+    () => buildNodeStatusMap(rawNodes, runStatus, parsedRunOutput, runResult, runTargetScenarioIndex),
+    [rawNodes, runStatus, parsedRunOutput, runResult, runTargetScenarioIndex]
   );
 
   const nodes = useMemo(
-    () => rawNodes.map((n) => (
-      nodeStatusMap[n.id]
-        ? { ...n, data: { ...n.data, runStatus: nodeStatusMap[n.id] } }
-        : (n.data.runStatus ? { ...n, data: { ...n.data, runStatus: undefined } } : n)
-    )),
-    [rawNodes, nodeStatusMap]
+    () => rawNodes.map((n) => {
+      const status = nodeStatusMap[n.id];
+      const error = nodeErrorMap[n.id] || null;
+      if (!status && !n.data.runStatus && !n.data.runError) return n;
+      return { ...n, data: { ...n.data, runStatus: status, runError: error } };
+    }),
+    [rawNodes, nodeStatusMap, nodeErrorMap]
   );
 
-  // Auto-pan the diagram so the currently-running node stays in view — the
-  // user shouldn't have to hunt for "where is it now" while it's lighting up.
+  const failedNodes = useMemo(() => nodes.filter((n) => n.data.runStatus === 'failed'), [nodes]);
+
+  // Auto-pan the diagram so the node that needs attention stays in view —
+  // while running, follow the currently-executing node; once the run lands,
+  // jump straight to the first failure so the user sees what broke without
+  // hunting through a dense diagram.
   const flowInstanceRef = useRef(null);
   useEffect(() => {
-    if (runStatus !== 'running') return;
-    const runningNode = nodes.find((n) => n.data.runStatus === 'running');
     const instance = flowInstanceRef.current;
-    if (runningNode && instance?.setCenter) {
-      const x = runningNode.position.x + 140;
-      const y = runningNode.position.y + 40;
+    if (!instance?.setCenter) return;
+
+    let target = null;
+    if (runStatus === 'running') {
+      target = nodes.find((n) => n.data.runStatus === 'running');
+    } else if (runStatus === 'failed' && failedNodes.length > 0) {
+      // Prefer landing on the node carrying the actual error message (the
+      // precisely-resolved failing step) over the scenario header it rolls
+      // up to — that's the node the user actually needs to look at.
+      target = failedNodes.find((n) => n.data.runError) || failedNodes[0];
+    }
+    if (target) {
+      const x = target.position.x + 140;
+      const y = target.position.y + 40;
       instance.setCenter(x, y, { zoom: 0.85, duration: 450 });
     }
-  }, [nodes, runStatus]);
+  }, [nodes, runStatus, failedNodes]);
 
   return (
     <div className="spec-visual">
@@ -558,14 +765,14 @@ function SpecVisual({ parsed, scenarioLineMap, onRunScenario, runDisabled, runSt
         onInit={(instance) => { flowInstanceRef.current = instance; }}
       >
         <Background color="#1e293b" gap={16} />
-        <Controls />
+        <Controls position="top-right" />
       </ReactFlow>
 
       {selectedNode && (
         <NodeDetailPanel
           node={selectedNode}
           lineNumber={selectedNode.data.type === 'scenario'
-            ? scenarioLineMap[selectedNode.data.title] ?? null
+            ? scenarioLineList[selectedNode.data.scenarioIndex] ?? null
             : null}
           onClose={() => setSelectedNode(null)}
           onRunScenario={(ln) => { onRunScenario(ln); setSelectedNode(null); }}

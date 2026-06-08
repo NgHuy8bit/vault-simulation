@@ -63,22 +63,28 @@ export function nodeSubtitle({ type, data }) {
   return data.timestamp || data.value || '';
 }
 
+// Spacing between nodes within a lane (horizontal) and between lanes (vertical).
+const NODE_GAP_X = 360;
+const LANE_GAP_Y = 220;
+const LANE_START_X = 60;
+const LANE_START_Y = 60;
+
 export function specToFlow(parsed) {
   const nodes = [];
   const edges = [];
 
-  let currentY = 50;
-  let currentX = 50;
+  let laneIndex = 0;
+  let currentX = LANE_START_X;
+  let currentY = LANE_START_Y;
   let lastNodeId = null;
 
-  function pushNode(type, data, isNewRow = false, matchText = null) {
-    if (isNewRow) {
-      currentY += 150;
-      currentX = 50;
-      lastNodeId = null;
-    }
+  // `lane` groups nodes that belong to the same scenario (or the shared setup
+  // lane) so the UI can draw a labelled boundary box behind each row.
+  let scenarioCounter = -1;
 
+  function pushNode(type, data, lane, matchText = null) {
     const id = newId();
+    if (type === 'scenario') scenarioCounter += 1;
     nodes.push({
       id,
       type: 'custom',
@@ -87,6 +93,12 @@ export function specToFlow(parsed) {
         type,
         title: nodeTitle({ type, data }),
         subtitle: nodeSubtitle({ type, data }),
+        lane,
+        // 0-based source-order index of this scenario — the only reliable key
+        // for locating its `##` heading line, since data-driven specs often
+        // have multiple scenarios sharing the exact same heading text and
+        // differing only by tag (name-based lookups would collide on those).
+        scenarioIndex: type === 'scenario' ? scenarioCounter : null,
         _rawData: clone(data),
         // Raw gauge step/scenario text — used to correlate this node with
         // live run progress and json-report results (which only carry text,
@@ -99,17 +111,35 @@ export function specToFlow(parsed) {
       edges.push({ id: `e-${lastNodeId}-${id}`, source: lastNodeId, target: id });
     }
     lastNodeId = id;
-    currentX += 320;
+    currentX += NODE_GAP_X;
   }
 
-  for (const step of parsed.setup_steps || []) {
-    pushNode(step.type, step.data, false, step.raw || null);
+  function startLane(name) {
+    laneIndex += 1;
+    currentX = LANE_START_X;
+    currentY = LANE_START_Y + (laneIndex - 1) * LANE_GAP_Y;
+    lastNodeId = null;
+    return { id: `lane-${laneIndex}`, name, y: currentY };
   }
-  for (const scenario of parsed.scenarios || []) {
-    pushNode('scenario', { name: scenario.name, tags: (scenario.tags || []).join(', ') }, true, scenario.name || null);
-    for (const step of scenario.steps || []) {
-      pushNode(step.type, step.data, false, step.raw || null);
+
+  const lanes = [];
+
+  if ((parsed.setup_steps || []).length > 0) {
+    const lane = startLane('Setup');
+    lanes.push(lane);
+    for (const step of parsed.setup_steps) {
+      pushNode(step.type, step.data, lane.id, step.raw || null);
     }
   }
-  return { nodes, edges };
+
+  for (const scenario of parsed.scenarios || []) {
+    const lane = startLane(scenario.name || 'Scenario');
+    lanes.push(lane);
+    pushNode('scenario', { name: scenario.name, tags: (scenario.tags || []).join(', ') }, lane.id, scenario.name || null);
+    for (const step of scenario.steps || []) {
+      pushNode(step.type, step.data, lane.id, step.raw || null);
+    }
+  }
+
+  return { nodes, edges, lanes, laneGap: LANE_GAP_Y };
 }

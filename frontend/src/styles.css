@@ -36,6 +36,10 @@ button {
   overflow: hidden;
 }
 
+.app-shell.sidebar-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
   height: 100vh;
   overflow: auto;
@@ -177,6 +181,30 @@ button {
   padding: 18px 24px;
   border-bottom: 1px solid #1e293b;
   background: #07101d;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sidebar-toggle-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1;
+  padding: 7px 9px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.sidebar-toggle-btn:hover {
+  color: #f8fafc;
+  border-color: #64748b;
 }
 
 .badges,
@@ -683,15 +711,57 @@ button.danger {
   gap: 0;
 }
 
-.spec-page > .toolbar {
+.spec-path-bar {
   flex-shrink: 0;
-  padding: 12px 24px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 24px;
+  background: #050b16;
+  border-bottom: 1px solid #14202f;
+}
+
+.spec-path-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.spec-path-value {
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spec-toolbar {
+  flex-shrink: 0;
+  padding: 10px 24px;
   border-bottom: 1px solid #1e293b;
   background: #07101d;
   align-items: center;
 }
 
-.spec-page > .source-box {
+.spec-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.spec-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.spec-main > .source-box {
   flex: 1;
   min-height: 0;
   margin: 16px 24px;
@@ -1185,7 +1255,7 @@ button.danger {
 /* React Flow Custom Node */
 .flow-node {
   position: relative;
-  width: 280px;
+  width: 320px;
   border: 1px solid #334155;
   border-radius: 8px;
   background: #0f172a;
@@ -1213,9 +1283,13 @@ button.danger {
 
 .flow-node strong {
   min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.35;
   font-size: 13px;
   color: #e2e8f0;
 }
@@ -1223,11 +1297,14 @@ button.danger {
 .flow-node small {
   min-width: 0;
   color: #94a3b8;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
   font-size: 11px;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .scenario-node {
@@ -1265,6 +1342,40 @@ button.danger {
 @keyframes node-pulse-failed {
   0%, 100% { box-shadow: 0 0 0 1px #ef4444, 0 0 10px 1px rgba(239, 68, 68, 0.35); }
   50% { box-shadow: 0 0 0 1px #ef4444, 0 0 22px 4px rgba(239, 68, 68, 0.65); }
+}
+
+/* Inline "what broke" banner — shows the assertion message straight on the
+   failing node so the user doesn't have to open the raw log to find it. */
+.node-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 12px 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  cursor: default;
+}
+
+.node-error-icon {
+  flex-shrink: 0;
+  color: #ef4444;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.node-error-text {
+  min-width: 0;
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
 }
 
 .inspector-modal-content {
@@ -1867,23 +1978,25 @@ button.danger {
 }
 
 /* ── Run output overlay panel ───────────────────────────────────────────── */
-.run-output-panel {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  max-height: 280px;
+.run-output-drawer {
+  flex-shrink: 0;
+  width: 420px;
+  max-width: 45vw;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid #1e293b;
+  border-left: 1px solid #1e293b;
+  background: #07101d;
   overflow: hidden;
-  transition: max-height 0.15s ease;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.55);
+  transition: width 0.15s ease, max-width 0.15s ease;
 }
 
-.run-output-panel.expanded {
-  max-height: 55vh;
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.75);
-  z-index: 20;
+/* Raw log lines are long and monospace — a narrow drawer wraps/truncates
+   them into near-unreadable mush, so widen the drawer (closer to the old
+   horizontal layout) whenever the raw log view is toggled on. */
+.run-output-drawer.wide {
+  width: min(1100px, 80vw);
+  max-width: 80vw;
 }
 
 .run-output-header {
@@ -1925,10 +2038,12 @@ button.danger {
 .run-output-path {
   font-size: 11px;
   font-family: ui-monospace, 'SF Mono', Consolas, monospace;
-  margin-right: auto;
+  padding: 6px 16px;
+  border-bottom: 1px solid #1e293b;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .run-output-close {

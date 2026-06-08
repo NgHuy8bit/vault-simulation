@@ -32,7 +32,7 @@
 services:
   viewer-runner:
     build:
-      context: ../../smart-contracts/.devcontainer
+      context: ../smart-contracts/.devcontainer
       dockerfile: Dockerfile
       args:
         UV_VERSION: "0.8.9"
@@ -55,7 +55,7 @@ services:
     volumes:
       # Mount smart-contracts read-write so gauge can run + write simulation
       # output, and the viewer can read/save spec files.
-      - ../../smart-contracts:/workspaces/smart-contracts
+      - ../smart-contracts:/workspaces/smart-contracts
       # Mount only the backend (not the whole viewer repo) into the runner.
       - ./backend:/opt/viewer-backend
       - ./runner:/opt/viewer-runner

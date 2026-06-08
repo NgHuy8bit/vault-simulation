@@ -21,6 +21,13 @@ export function SpecCustomNode({ data, isConnectable }) {
         </div>
       </div>
 
+      {data.runStatus === 'failed' && data.runError && (
+        <div className="node-error-banner" title={data.runError}>
+          <span className="node-error-icon">✗</span>
+          <span className="node-error-text">{data.runError}</span>
+        </div>
+      )}
+
       <Handle
         type="source"
         position={Position.Right}
