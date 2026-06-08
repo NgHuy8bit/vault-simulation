@@ -1,6 +1,0 @@
-{
-  "smart_contracts_dir": "/Users/huynguyen/Desktop/Finx/source/smart-contracts",
-  "container_name": "",
-  "container_workdir": "/workspaces/smart-contracts",
-  "bunx_path": "/home/vscode/.bun/bin/bunx"
-}

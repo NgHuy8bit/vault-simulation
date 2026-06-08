@@ -1,0 +1,94 @@
+# Dedicated runner container for the Vault Simulation Viewer.
+#
+# Why this exists:
+#   `gauge run` only works inside the smart-contracts Linux devcontainer
+#   (Linux ELF binary + uv venv + bun + Gauge Python plugin, all wired up by
+#   `script/setup`). Historically the viewer backend ran on the macOS host
+#   and shelled out via `docker exec` into whatever VS Code devcontainer
+#   happened to be running — fragile (container name changes, container not
+#   running, requires VS Code open, etc).
+#
+#   This compose file instead builds a long-lived, dedicated container from
+#   the *same* Dockerfile as the devcontainer, mounts `smart-contracts` and
+#   the viewer backend into it, and runs the FastAPI backend directly inside.
+#   `gauge run` then becomes a plain local subprocess (see app/api/routes/run.py
+#   — the existing Linux branch already handles this with no docker exec).
+#
+# Setup before first run:
+#   cp runner/.env.example runner/.env   # then fill in GITHUB_TOKEN etc.
+#   See runner/.env.example for why a token is needed (private `contracts-api`
+#   git dependency that `uv sync` must clone).
+#
+# Usage:
+#   cd debugTool/simulation-viewer
+#   docker compose up -d --build      # first run (builds + runs full setup —
+#                                     # can take 10-20 min the very first time)
+#   docker compose logs -f            # tail backend / setup logs
+#   docker compose down               # stop
+#
+# This brings up BOTH the backend (gauge runner, port 8001) and the frontend
+# (Vite dev server, port 5173) — open http://localhost:5173.
+
+services:
+  viewer-runner:
+    build:
+      context: ../../smart-contracts/.devcontainer
+      dockerfile: Dockerfile
+      args:
+        UV_VERSION: "0.8.9"
+        BUN_VERSION: "1.2.1"
+        PYTHON_VERSION: "3.10"
+    container_name: sim-viewer-runner
+    user: vscode
+    working_dir: /workspaces/smart-contracts
+    env_file:
+      - path: ./runner/.env
+        required: false
+    environment:
+      PYTHONPATH: /workspaces/smart-contracts
+      DEVELOPMENT_MODE: "1"
+      DOCKER_ENVIRONMENT: "1"
+      # Tell settings_store.py where smart-contracts lives inside this
+      # container (bind-mounted below) — bypasses host-path auto-detection.
+      # (container_workdir / bunx_path defaults already match this layout.)
+      SMART_CONTRACTS_DIR: /workspaces/smart-contracts
+    volumes:
+      # Mount smart-contracts read-write so gauge can run + write simulation
+      # output, and the viewer can read/save spec files.
+      - ../../smart-contracts:/workspaces/smart-contracts
+      # Mount only the backend (not the whole viewer repo) into the runner.
+      - ./backend:/opt/viewer-backend
+      - ./runner:/opt/viewer-runner
+      # NOTE: uv's downloaded-Python cache (~/.local/share/uv) intentionally
+      # is NOT persisted via a named volume — Docker creates those root-owned,
+      # and this container runs as the unprivileged `vscode` user (permission
+      # denied writing to it). Consequence: rebuilding/recreating this
+      # container loses the cache, so `.venv`'s python symlink can dangle.
+      # The entrypoint handles this by checking `.venv/bin/python` actually
+      # runs and re-doing setup if not (fast — ~2 min thanks to the layer
+      # cache + stored git credentials), so this self-heals automatically.
+    ports:
+      - "8001:8000"
+    entrypoint: ["/opt/viewer-runner/entrypoint.sh"]
+    restart: unless-stopped
+
+  viewer-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: sim-viewer-frontend
+    environment:
+      # vite.config.js proxies /api/* to this target — same-origin from the
+      # browser's perspective, so no CORS / VITE_API_BASE juggling needed.
+      VITE_API_PROXY_TARGET: http://viewer-runner:8000
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume: keep the container's own node_modules (Linux
+      # binaries) instead of the host's (macOS) — avoids native-module clashes.
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - viewer-runner
+    restart: unless-stopped
+

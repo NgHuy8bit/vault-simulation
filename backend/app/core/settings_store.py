@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,17 @@ _SOURCE_ROOT = _VIEWER_DIR.parent.parent
 
 _SETTINGS_FILE = _VIEWER_DIR / "viewer-settings.json"
 
-_DEFAULT_SMART_CONTRACTS_DIR = str((_SOURCE_ROOT / "smart-contracts").resolve())
+# Inside the dedicated runner container (see ../../docker-compose.yml),
+# `smart-contracts` is bind-mounted at /workspaces/smart-contracts and the
+# path-from-this-file-location heuristic below doesn't apply (the viewer
+# backend lives at /opt/viewer-backend, not under the source tree). The
+# compose file sets SMART_CONTRACTS_DIR so we can short-circuit detection.
+_ENV_SMART_CONTRACTS_DIR = os.environ.get("SMART_CONTRACTS_DIR", "").strip()
+
+if _ENV_SMART_CONTRACTS_DIR:
+    _DEFAULT_SMART_CONTRACTS_DIR = _ENV_SMART_CONTRACTS_DIR
+else:
+    _DEFAULT_SMART_CONTRACTS_DIR = str((_SOURCE_ROOT / "smart-contracts").resolve())
 
 DEFAULTS: dict[str, str] = {
     "smart_contracts_dir": _DEFAULT_SMART_CONTRACTS_DIR,
