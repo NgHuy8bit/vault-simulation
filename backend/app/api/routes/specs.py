@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from app.core.config import SPEC_BASE
 from app.core.paths import safe_resolve
+from app.core.settings_store import get_spec_base
 from app.models.spec import ParsedSpec, SaveSpecRequest
 from app.services.spec_parser import parse_spec_content
 from app.services.spec_serializer import serialize_spec
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api", tags=["specs"])
 def find_spec(response_path: str = Query(..., alias="response-path")):
     parent_dir = "/".join(response_path.split("/")[:-1])
     spec_rel_path = f"{parent_dir}.spec"
-    target = safe_resolve(SPEC_BASE, spec_rel_path)
+    target = safe_resolve(get_spec_base(), spec_rel_path)
     if not target.exists():
         return {"found": False}
     return {"found": True, "content": target.read_text("utf-8"), "path": spec_rel_path}
@@ -21,7 +21,7 @@ def find_spec(response_path: str = Query(..., alias="response-path")):
 
 @router.get("/spec")
 def read_spec(path: str = Query(...)):
-    target = safe_resolve(SPEC_BASE, path)
+    target = safe_resolve(get_spec_base(), path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Spec not found")
     return {"content": target.read_text("utf-8"), "path": path}
@@ -29,7 +29,7 @@ def read_spec(path: str = Query(...)):
 
 @router.get("/parse-spec", response_model=ParsedSpec)
 def parse_spec(path: str = Query(...)):
-    target = safe_resolve(SPEC_BASE, path)
+    target = safe_resolve(get_spec_base(), path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Spec not found")
     return parse_spec_content(target.read_text("utf-8"))
@@ -41,7 +41,7 @@ def save_spec(payload: SaveSpecRequest):
     if not rel_path.endswith(".spec"):
         raise HTTPException(status_code=400, detail="Path must end with .spec")
 
-    target = safe_resolve(SPEC_BASE, rel_path)
+    target = safe_resolve(get_spec_base(), rel_path)
     if payload.steps_json is not None:
         content = serialize_spec(payload.steps_json.model_dump())
     else:

@@ -13,25 +13,42 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.config import SMART_CONTRACTS_DIR, SPEC_BASE
 from app.core.paths import safe_resolve
+from app.core.settings_store import get_run_settings, get_spec_base, get_smart_contracts_dir
 
 router = APIRouter(prefix="/api", tags=["run"])
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
-# Absolute path to bunx inside the Linux devcontainer
-_BUNX_IN_CONTAINER = "/home/vscode/.bun/bin/bunx"
-# Working directory inside the container (devcontainer mounts at /workspaces/smart-contracts)
-_CWD_IN_CONTAINER = "/workspaces/smart-contracts"
 
+async def _resolve_container_id(container_name: str, bunx_path: str) -> str:
+    """Return container ID to use for docker exec.
 
-async def _find_devcontainer_id() -> str:
-    """Return the ID of the first running VS Code devcontainer."""
+    If *container_name* is set, match by name/id directly.
+    Otherwise auto-detect the first running VS Code devcontainer that has bunx.
+    """
     docker = shutil.which("docker")
     if not docker:
         raise RuntimeError("docker CLI not found. Make sure Docker/OrbStack is installed.")
 
+    if container_name:
+        # Explicit container — just verify it is running
+        proc = await asyncio.create_subprocess_exec(
+            docker, "ps", "--filter", f"name={container_name}",
+            "--format", "{{.ID}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        ids = [l.strip() for l in stdout.decode().split("\n") if l.strip()]
+        if not ids:
+            raise RuntimeError(
+                f"Container '{container_name}' is not running. "
+                "Check the container name in Settings."
+            )
+        return ids[0]
+
+    # Auto-detect: any devcontainer with bunx
     proc = await asyncio.create_subprocess_exec(
         docker, "ps",
         "--filter", "label=devcontainer.local_folder",
@@ -40,18 +57,17 @@ async def _find_devcontainer_id() -> str:
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, _ = await proc.communicate()
-    ids = [line.strip() for line in stdout.decode().split("\n") if line.strip()]
+    ids = [l.strip() for l in stdout.decode().split("\n") if l.strip()]
     if not ids:
         raise RuntimeError(
             "No VS Code devcontainer found. "
-            "Open this project in VS Code with the Remote - Containers extension."
+            "Open this project in VS Code with the Remote - Containers extension, "
+            "or set a container name in Settings."
         )
 
-    # Prefer the container that actually has bunx
-    docker_bin = docker
     for cid in ids:
         check = await asyncio.create_subprocess_exec(
-            docker_bin, "exec", cid, "test", "-f", _BUNX_IN_CONTAINER,
+            docker, "exec", cid, "test", "-f", bunx_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -59,7 +75,6 @@ async def _find_devcontainer_id() -> str:
         if check.returncode == 0:
             return cid
 
-    # Fall back to first container if none passed the check
     return ids[0]
 
 
@@ -70,8 +85,12 @@ class RunSpecRequest(BaseModel):
 
 @router.post("/run-spec")
 async def run_spec(payload: RunSpecRequest):
+    run_cfg = get_run_settings()
+    spec_base = get_spec_base()
+    smart_contracts_dir = get_smart_contracts_dir()
+
     spec_path = payload.spec_path.strip()
-    spec_file = safe_resolve(SPEC_BASE, spec_path)
+    spec_file = safe_resolve(spec_base, spec_path)
     if not spec_file.exists():
         raise HTTPException(status_code=404, detail="Spec not found")
 
@@ -79,14 +98,18 @@ async def run_spec(payload: RunSpecRequest):
     if payload.line_number:
         gauge_path = f"{gauge_path}:{payload.line_number}"
 
+    bunx_path = run_cfg["bunx_path"]
+    container_workdir = run_cfg["container_workdir"]
+    container_name = run_cfg["container_name"]
+
     async def generate():
         try:
             if platform.system() == "Darwin":
                 # macOS host: route through docker exec into the devcontainer
-                container_id = await _find_devcontainer_id()
+                container_id = await _resolve_container_id(container_name, bunx_path)
                 shell_cmd = (
-                    f"cd {shlex.quote(_CWD_IN_CONTAINER)} && "
-                    f"{_BUNX_IN_CONTAINER} gauge run {shlex.quote(gauge_path)} --env ci"
+                    f"cd {shlex.quote(container_workdir)} && "
+                    f"{bunx_path} gauge run {shlex.quote(gauge_path)} --env ci"
                 )
                 docker = shutil.which("docker")
                 process = await asyncio.create_subprocess_exec(
@@ -97,15 +120,14 @@ async def run_spec(payload: RunSpecRequest):
                 )
             else:
                 # Linux (inside container): run directly
-                bunx = _BUNX_IN_CONTAINER
                 env = {
                     **os.environ,
-                    "PATH": f"{os.path.dirname(bunx)}:{os.environ.get('PATH', '')}",
+                    "PATH": f"{os.path.dirname(bunx_path)}:{os.environ.get('PATH', '')}",
                 }
                 process = await asyncio.create_subprocess_exec(
-                    bunx,
+                    bunx_path,
                     "gauge", "run", gauge_path, "--env", "ci",
-                    cwd=str(SMART_CONTRACTS_DIR),
+                    cwd=str(smart_contracts_dir),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     env=env,

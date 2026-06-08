@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import files, run, scenarios, specs, tree
+from app.api.routes import files, run, scenarios, settings, specs, tree
 from app.core.config import APP_NAME
 
 
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     app.include_router(scenarios.router)
     app.include_router(specs.router)
     app.include_router(run.router)
+    app.include_router(settings.router)
     return app
 
 

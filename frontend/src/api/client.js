@@ -51,4 +51,15 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   runSpec: streamRunSpec,
+
+  // Settings
+  getSettings: () => request('/api/settings'),
+  saveSettings: (payload) =>
+    request('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  resetSettings: () => request('/api/settings', { method: 'DELETE' }),
+  listContainers: () => request('/api/containers'),
 };

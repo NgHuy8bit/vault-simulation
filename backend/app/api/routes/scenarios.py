@@ -2,8 +2,8 @@ import json
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.core.config import SIMULATION_BASE
 from app.core.paths import safe_resolve
+from app.core.settings_store import get_simulation_base
 from app.models.scenario import ScenarioSummary
 from app.services.simulation_processor import process_simulation_response
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api", tags=["scenarios"])
 
 @router.get("/scenario-summary", response_model=ScenarioSummary)
 def scenario_summary(response_path: str = Query(..., alias="response-path")):
-    target = safe_resolve(SIMULATION_BASE, response_path)
+    target = safe_resolve(get_simulation_base(), response_path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
     try:

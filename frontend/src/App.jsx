@@ -4,6 +4,7 @@ import { api } from './api/client.js';
 import { Accounts } from './components/Accounts.jsx';
 import { Diagram } from './components/Diagram.jsx';
 import { Postings } from './components/Postings.jsx';
+import { SettingsPanel } from './components/SettingsPanel.jsx';
 import { Sidebar } from './components/Sidebar.jsx';
 import { SpecView } from './components/SpecView.jsx';
 import { Timeline } from './components/Timeline.jsx';
@@ -22,6 +23,7 @@ export function App() {
   const [loadingSelection, setLoadingSelection] = useState(false);
   const [error, setError] = useState('');
   const [routeVersion, setRouteVersion] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     api
@@ -155,8 +157,16 @@ export function App() {
             {summary && <span className="chip">{summary.accounts.length} accounts</span>}
             {spec && !summary && <span className="chip chip-ok">spec only</span>}
             {spec && summary && <span className="chip chip-ok">spec + response</span>}
+            <button
+              className="settings-gear-btn"
+              title="Settings"
+              onClick={() => setShowSettings(true)}
+            >
+              ⚙
+            </button>
           </div>
         </header>
+        {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
         {selectedItem && (
           <nav className="tabs">

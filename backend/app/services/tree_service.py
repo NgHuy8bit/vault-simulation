@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.core.config import SIMULATION_BASE, SPEC_BASE
+from app.core.settings_store import get_simulation_base, get_spec_base
 
 
 def _normalize(name: str) -> str:
@@ -23,21 +23,27 @@ def _extract_scenarios(spec_path: Path) -> list[dict[str, Any]]:
     return scenarios
 
 
-def build_tree(directory: Path = SPEC_BASE) -> dict[str, Any]:
+def build_tree(directory: Path | None = None) -> dict[str, Any]:
+    spec_base = get_spec_base()
+    simulation_base = get_simulation_base()
+
+    if directory is None:
+        directory = spec_base
+
     result: dict[str, Any] = {"dirs": {}, "files": []}
     if not directory.exists():
         return result
 
     entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     for entry in entries:
-        rel_spec = str(entry.relative_to(SPEC_BASE))
+        rel_spec = str(entry.relative_to(spec_base))
         if entry.is_dir():
             subtree = build_tree(entry)
             if subtree["files"] or subtree["dirs"]:
                 result["dirs"][entry.name] = {"path": rel_spec, **subtree}
         elif entry.name.endswith(".spec"):
             spec_base_name = entry.name[:-5]
-            sim_dir = SIMULATION_BASE / entry.relative_to(SPEC_BASE).parent / spec_base_name
+            sim_dir = simulation_base / entry.relative_to(spec_base).parent / spec_base_name
 
             # Build a lookup of normalized response name → full response info
             response_lookup: dict[str, dict[str, Any]] = {}
@@ -47,8 +53,8 @@ def build_tree(directory: Path = SPEC_BASE) -> dict[str, Any]:
                         stem = sim_entry.name[: -len(".response.json")]
                         req_file = sim_entry.with_name(stem + ".request.json")
                         response_lookup[stem] = {
-                            "responsePath": str(sim_entry.relative_to(SIMULATION_BASE)),
-                            "requestPath": str(req_file.relative_to(SIMULATION_BASE)) if req_file.exists() else None,
+                            "responsePath": str(sim_entry.relative_to(simulation_base)),
+                            "requestPath": str(req_file.relative_to(simulation_base)) if req_file.exists() else None,
                         }
 
             # Extract scenario names from spec content, then match to response files
