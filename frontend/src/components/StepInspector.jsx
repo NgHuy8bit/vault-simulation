@@ -99,7 +99,7 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
           title="Balance rows"
           rows={data.rows || []}
           columns={['timestamp', 'account_id', 'address', 'balance']}
-          inputTypes={{ timestamp: 'datetime-local', balance: 'number' }}
+          inputTypes={{ timestamp: 'datetime-local' }}
           suggestions={{ account_id: accountIds, address: addresses }}
           onAdd={() => addRow('rows', { timestamp: '', account_id: '', address: '', balance: '0' })}
           onChange={(index, key, value) => patchRow('rows', index, key, value)}
@@ -118,7 +118,7 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
           title="Balance rows"
           rows={data.rows || []}
           columns={['timestamp', 'account_id', 'address', 'denomination', 'balance']}
-          inputTypes={{ timestamp: 'datetime-local', balance: 'number' }}
+          inputTypes={{ timestamp: 'datetime-local' }}
           suggestions={{ account_id: accountIds, address: addresses }}
           onAdd={() => addRow('rows', { timestamp: '', account_id: '', address: '', denomination: data.denomination || 'VND', phase: 'POSTING_PHASE_COMMITTED', asset: 'COMMERCIAL_BANK_MONEY', balance: '0' })}
           onChange={(index, key, value) => patchRow('rows', index, key, value)}
