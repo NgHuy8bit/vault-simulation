@@ -48,25 +48,35 @@ services:
       PYTHONPATH: /workspaces/smart-contracts
       DEVELOPMENT_MODE: "1"
       DOCKER_ENVIRONMENT: "1"
-      # Tell settings_store.py where smart-contracts lives inside this
-      # container (bind-mounted below) — bypasses host-path auto-detection.
-      # (container_workdir / bunx_path defaults already match this layout.)
       SMART_CONTRACTS_DIR: /workspaces/smart-contracts
+      # ── Isolated venv outside smart-contracts ──────────────────────────────
+      # The runner's Python virtualenv lives at /opt/sc-venv (bind-mounted
+      # from ./runner/.venv-sc below) — completely outside the shared
+      # smart-contracts checkout so it NEVER touches the devcontainer's .venv.
+      #
+      # UV_PROJECT_ENVIRONMENT: tells `uv sync` / `uv venv` to create and use
+      #   the venv at this path instead of the default smart-contracts/.venv.
+      # GAUGE_PYTHON_COMMAND: overrides the hardcoded path in
+      #   config/gauge/default/python.properties so gauge uses the same venv.
+      UV_PROJECT_ENVIRONMENT: /opt/sc-venv
+      GAUGE_PYTHON_COMMAND: /opt/sc-venv/bin/python
     volumes:
       # Mount smart-contracts read-write so gauge can run + write simulation
       # output, and the viewer can read/save spec files.
       - ../smart-contracts:/workspaces/smart-contracts
+      # Runner's private virtualenv — mounted at /opt/sc-venv, a path that
+      # has NO overlap with the smart-contracts tree. Combined with the env
+      # vars above this means script/setup and gauge both use /opt/sc-venv
+      # and smart-contracts/.venv is left completely untouched.
+      - ./runner/.venv-sc:/opt/sc-venv
       # Mount only the backend (not the whole viewer repo) into the runner.
       - ./backend:/opt/viewer-backend
       - ./runner:/opt/viewer-runner
       # NOTE: uv's downloaded-Python cache (~/.local/share/uv) intentionally
-      # is NOT persisted via a named volume — Docker creates those root-owned,
-      # and this container runs as the unprivileged `vscode` user (permission
-      # denied writing to it). Consequence: rebuilding/recreating this
-      # container loses the cache, so `.venv`'s python symlink can dangle.
-      # The entrypoint handles this by checking `.venv/bin/python` actually
-      # runs and re-doing setup if not (fast — ~2 min thanks to the layer
-      # cache + stored git credentials), so this self-heals automatically.
+      # is NOT persisted — Docker creates named volumes root-owned, and this
+      # container runs as the unprivileged `vscode` user. When the cache is
+      # gone the venv's interpreter symlink dangles; the entrypoint detects
+      # this and re-runs setup automatically (~2 min, self-healing).
     ports:
       - "8001:8000"
     entrypoint: ["/opt/viewer-runner/entrypoint.sh"]
@@ -91,4 +101,3 @@ services:
     depends_on:
       - viewer-runner
     restart: unless-stopped
-

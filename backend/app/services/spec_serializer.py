@@ -426,16 +426,19 @@ def _serialize_custom_instruction(data: dict[str, Any]) -> list[str]:
     timestamp = data.get("timestamp", "")
     amount = _format_amount(data.get("amount", "0"))
     denomination = data.get("denomination") or "VND"
-    debtor = data.get("debtor_account_id", "")
-    debtor_addr = data.get("debtor_account_address", "")
-    creditor = data.get("creditor_account_id", "")
-    creditor_addr = data.get("creditor_account_address", "")
+    account_id = data.get("account_id", "")
+    from_address = data.get("from_address", "")
+    to_address = data.get("to_address", "")
+    detail = data.get("instruction_detail") or []
 
-    return [
-        f'* At "{timestamp}", make a Custom Instruction of "{amount}" "{denomination}" '
-        f'from debtor account ID "{debtor}" with address "{debtor_addr}" '
-        f'to creditor account ID "{creditor}" with address "{creditor_addr}".'
-    ]
+    header = (
+        f'* At "{timestamp}", initiate a Custom Instruction of "{amount}" "{denomination}" '
+        f'of account ID "{account_id}" from address "{from_address}" to address "{to_address}" '
+        f'with instruction detail:'
+    )
+    if not detail:
+        return [header, "", _format_table(["key", "value"], [])]
+    return [header, "", _format_table(list(detail[0].keys()), detail)]
 
 
 # ── Posting Instruction Batch ──────────────────────────────────────────────────

@@ -19,6 +19,7 @@ set -euo pipefail
 export PATH="/home/vscode/.local/bin:/home/vscode/.bun/bin:${PATH}"
 
 SC_DIR="/workspaces/smart-contracts"
+SC_VENV_DIR="/opt/sc-venv"      # runner's private venv — OUTSIDE smart-contracts
 VIEWER_BACKEND_DIR="/opt/viewer-backend"
 VENV_DIR="${VIEWER_BACKEND_DIR}/.venv-runner"
 SETUP_STAMP="${SC_DIR}/.viewer-runner-setup-ok"
@@ -34,25 +35,37 @@ git config --global user.name "${GIT_USER_NAME:-viewer-runner}"
 git config --global --add safe.directory "$SC_DIR"
 
 # ── 2. One-time smart-contracts toolchain setup ─────────────────────────────
-# We can't trust the stamp file alone: it lives in the bind-mounted
-# smart-contracts dir and survives container rebuilds, but `.venv`'s
-# interpreter is a symlink into THIS container's uv cache — if the cache
-# volume is fresh (or was wiped) the symlink dangles even though the stamp
-# says "done". So always verify `.venv/bin/python` actually runs; re-run
-# setup if it doesn't, regardless of the stamp.
+# The runner's Python venv lives at SC_VENV_DIR (/opt/sc-venv), which is
+# bind-mounted from ./runner/.venv-sc — completely outside the shared
+# smart-contracts checkout. This means smart-contracts/.venv is NEVER
+# touched by this container, so the VS Code devcontainer's own venv is
+# always left intact.
+#
+# UV_PROJECT_ENVIRONMENT=/opt/sc-venv tells `uv sync` to create/use the
+# venv there instead of the default smart-contracts/.venv.
+# GAUGE_PYTHON_COMMAND=/opt/sc-venv/bin/python overrides the path hardcoded
+# in config/gauge/default/python.properties so gauge uses the same venv.
+# Both env vars are set in docker-compose.yml and re-exported here for
+# subprocesses (script/setup calls uv, which inherits UV_PROJECT_ENVIRONMENT).
+export UV_PROJECT_ENVIRONMENT="${SC_VENV_DIR}"
+export GAUGE_PYTHON_COMMAND="${SC_VENV_DIR}/bin/python"
+
 venv_python_ok() {
-    "${SC_DIR}/.venv/bin/python" --version >/dev/null 2>&1
+    "${SC_VENV_DIR}/bin/python" --version >/dev/null 2>&1
 }
 
 if [ -f "$SETUP_STAMP" ] && venv_python_ok; then
-    echo "==> smart-contracts setup already done and .venv looks healthy — skipping."
+    echo "==> smart-contracts setup already done and venv looks healthy — skipping."
 else
     if [ -f "$SETUP_STAMP" ]; then
-        echo "==> Stamp says setup is done, but .venv's Python is broken (likely a stale symlink from a previous container build) — re-running setup…"
+        echo "==> Stamp says setup is done, but venv's Python is broken (stale symlink after cache wipe) — re-running setup…"
         rm -f "$SETUP_STAMP"
     else
         echo "==> Running smart-contracts setup (first run only — this can take a while)…"
     fi
+    # /opt/sc-venv is a bind-mount point so uv can't rm-rf the directory
+    # itself — clear its contents first so uv finds an empty dir to populate.
+    find "${SC_VENV_DIR}" -mindepth 1 -delete 2>/dev/null || true
     (cd "$SC_DIR" && DOCKER_ENVIRONMENT=1 ./script/setup) && touch "$SETUP_STAMP" \
         || echo "!! smart-contracts setup failed — gauge run will likely fail until this is fixed. Re-run: docker compose exec viewer-runner bash -lc 'cd /workspaces/smart-contracts && ./script/setup'"
 fi

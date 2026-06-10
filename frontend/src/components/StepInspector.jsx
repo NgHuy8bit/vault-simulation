@@ -233,10 +233,17 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
         <Field label="Timestamp" type="datetime-local" value={data.timestamp} onChange={(v) => patch('timestamp', v)} />
         <Field label="Amount" type="number" value={data.amount} onChange={(v) => patch('amount', v)} />
         <Field label="Denomination" value={data.denomination} onChange={(v) => patch('denomination', v)} />
-        <FieldWithSuggestions label="Debtor account ID" fieldKey="debtor_account_id" value={data.debtor_account_id} onChange={(v) => patch('debtor_account_id', v)} suggestions={accountIds} />
-        <FieldWithSuggestions label="Debtor address" fieldKey="debtor_address" value={data.debtor_account_address} onChange={(v) => patch('debtor_account_address', v)} suggestions={addresses} />
-        <FieldWithSuggestions label="Creditor account ID" fieldKey="creditor_account_id" value={data.creditor_account_id} onChange={(v) => patch('creditor_account_id', v)} suggestions={accountIds} />
-        <FieldWithSuggestions label="Creditor address" fieldKey="creditor_address" value={data.creditor_account_address} onChange={(v) => patch('creditor_account_address', v)} suggestions={addresses} />
+        <FieldWithSuggestions label="Account ID" fieldKey="account_id" value={data.account_id} onChange={(v) => patch('account_id', v)} suggestions={accountIds} />
+        <FieldWithSuggestions label="From address" fieldKey="from_address" value={data.from_address} onChange={(v) => patch('from_address', v)} suggestions={addresses} />
+        <FieldWithSuggestions label="To address" fieldKey="to_address" value={data.to_address} onChange={(v) => patch('to_address', v)} suggestions={addresses} />
+        <EditableTable
+          label="Instruction detail"
+          rows={data.instruction_detail || []}
+          columns={['key', 'value']}
+          onAdd={() => addRow('instruction_detail', { key: '', value: '' })}
+          onChange={(index, key, value) => patchRow('instruction_detail', index, key, value)}
+          onRemove={(index) => removeRow('instruction_detail', index)}
+        />
       </FormGrid>
     );
   }

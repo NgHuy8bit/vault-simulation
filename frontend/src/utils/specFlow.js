@@ -64,10 +64,13 @@ export function nodeSubtitle({ type, data }) {
 }
 
 // Spacing between nodes within a lane (horizontal) and between lanes (vertical).
-const NODE_GAP_X = 360;
-const LANE_GAP_Y = 220;
-const LANE_START_X = 60;
-const LANE_START_Y = 60;
+// NODE_GAP_X = node-width (380) + desired horizontal gap (~120px) = 500
+// LANE_GAP_Y must exceed max node height (~160px for balance_check with pills)
+//   plus desired row gap (~120px) → 280+
+const NODE_GAP_X = 500;
+const LANE_GAP_Y = 300;
+const LANE_START_X = 80;
+const LANE_START_Y = 80;
 
 export function specToFlow(parsed) {
   const nodes = [];
@@ -82,7 +85,7 @@ export function specToFlow(parsed) {
   // lane) so the UI can draw a labelled boundary box behind each row.
   let scenarioCounter = -1;
 
-  function pushNode(type, data, lane, matchText = null) {
+  function pushNode(type, data, lane, matchText = null, specLine = null) {
     const id = newId();
     if (type === 'scenario') scenarioCounter += 1;
     nodes.push({
@@ -104,6 +107,10 @@ export function specToFlow(parsed) {
         // live run progress and json-report results (which only carry text,
         // not node IDs) so the diagram can light up as execution proceeds.
         _matchText: matchText,
+        // 1-based line number of this step/scenario in the .spec file —
+        // used as the primary key for matching against json-report results
+        // (more reliable than text matching for duplicate/similar steps).
+        _specLine: specLine,
       },
     });
 
@@ -128,16 +135,16 @@ export function specToFlow(parsed) {
     const lane = startLane('Setup');
     lanes.push(lane);
     for (const step of parsed.setup_steps) {
-      pushNode(step.type, step.data, lane.id, step.raw || null);
+      pushNode(step.type, step.data, lane.id, step.raw || null, step.line ?? null);
     }
   }
 
   for (const scenario of parsed.scenarios || []) {
     const lane = startLane(scenario.name || 'Scenario');
     lanes.push(lane);
-    pushNode('scenario', { name: scenario.name, tags: (scenario.tags || []).join(', ') }, lane.id, scenario.name || null);
+    pushNode('scenario', { name: scenario.name, tags: (scenario.tags || []).join(', ') }, lane.id, scenario.name || null, scenario.line ?? null);
     for (const step of scenario.steps || []) {
-      pushNode(step.type, step.data, lane.id, step.raw || null);
+      pushNode(step.type, step.data, lane.id, step.raw || null, step.line ?? null);
     }
   }
 

@@ -157,7 +157,7 @@ function RunOutputPanel({ lines, status, progress, result, specPath, specScenari
           Log
         </button>
         <div className="spacer" />
-        <button className="run-output-close" onClick={onCollapse} title="Collapse panel">⏵</button>
+        <button className="run-output-close" onClick={onCollapse} title="Collapse panel">⏷</button>
         <button className="run-output-close" onClick={onClose} title="Close">✕</button>
       </div>
       <div className="run-output-path muted">{specPath}</div>
@@ -259,25 +259,483 @@ function RunOutputPanel({ lines, status, progress, result, specPath, specScenari
   );
 }
 
+// ── Node detail panel helpers ─────────────────────────────────────────────
+
+function fmtTimestamp(ts) {
+  if (!ts) return '—';
+  return String(ts).replace('T', ' ').replace(/\s*[+-]\d{2}:?\d{2}$|Z$/, '');
+}
+
+function fmtBalance(val) {
+  if (val == null || val === '') return '—';
+  const n = Number(String(val).replace(/_/g, ''));
+  if (isNaN(n)) return String(val).replace(/_/g, ',');
+  return n.toLocaleString('en-US');
+}
+
+function fmtAmount(val, denom) {
+  const s = fmtBalance(val);
+  return denom ? `${s} ${denom}` : s;
+}
+
+function DetailLabel({ children }) {
+  return <div className="nd-label">{children}</div>;
+}
+function DetailValue({ children, mono, muted, highlight }) {
+  const cls = ['nd-value', mono && 'mono', muted && 'muted', highlight && 'highlight'].filter(Boolean).join(' ');
+  return <div className={cls}>{children || '—'}</div>;
+}
+function DetailRow({ label, children, mono, muted, highlight }) {
+  return (
+    <div className="nd-row">
+      <DetailLabel>{label}</DetailLabel>
+      <DetailValue mono={mono} muted={muted} highlight={highlight}>{children}</DetailValue>
+    </div>
+  );
+}
+function DetailSection({ title, children }) {
+  return (
+    <div className="nd-section">
+      {title && <div className="nd-section-title">{title}</div>}
+      {children}
+    </div>
+  );
+}
+
+function KVTable({ rows }) {
+  if (!rows || rows.length === 0) return null;
+  const keys = Object.keys(rows[0] || {});
+  return (
+    <table className="nd-table">
+      <thead>
+        <tr>{keys.map((k) => <th key={k}>{k}</th>)}</tr>
+      </thead>
+      <tbody>
+        {rows.map((row, i) => (
+          <tr key={i}>
+            {keys.map((k) => <td key={k}>{String(row[k] ?? '—')}</td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// Balance check — the richest view: structured table grouping by timestamp
+function BalanceCheckView({ data }) {
+  const rows = data.rows || [];
+  const denom = data.denomination;
+
+  // Group rows by timestamp so repeated timestamps collapse visually
+  const groups = [];
+  let last = null;
+  for (const row of rows) {
+    const ts = fmtTimestamp(row.timestamp);
+    if (ts !== last) { groups.push({ ts, rows: [] }); last = ts; }
+    groups[groups.length - 1].rows.push(row);
+  }
+
+  return (
+    <div className="nd-balance-wrap">
+      {denom && (
+        <div className="nd-balance-denom-badge">{denom}</div>
+      )}
+      <table className="nd-balance-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Timestamp</th>
+            <th>Account</th>
+            <th>Address</th>
+            <th className="nd-col-balance">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) =>
+            g.rows.map((row, j) => {
+              const isZero = Number(String(row.balance).replace(/_/g, '')) === 0;
+              const bal = fmtBalance(row.balance);
+              return (
+                <tr key={`${g.ts}-${j}`} className="nd-balance-row">
+                  <td className="nd-col-idx">{groups.indexOf(g) + j + 1}</td>
+                  <td className="nd-col-ts">
+                    {j === 0 ? (
+                      <span className="nd-ts-badge">{g.ts}</span>
+                    ) : (
+                      <span className="nd-ts-repeat">↑</span>
+                    )}
+                  </td>
+                  <td className="nd-col-account">
+                    <span className="nd-account-id">{row.account_id || '—'}</span>
+                    {(row.phase || row.asset) && (
+                      <span className="nd-phase-asset">
+                        {[row.phase, row.asset].filter(Boolean).map((v) =>
+                          v.replace('POSTING_PHASE_', '').replace('_BANK_MONEY', '')
+                        ).join(' · ')}
+                      </span>
+                    )}
+                  </td>
+                  <td className="nd-col-address">
+                    <span className="nd-address-pill">{row.address || '—'}</span>
+                  </td>
+                  <td className={`nd-col-balance ${isZero ? 'zero' : 'nonzero'}`}>
+                    {bal}
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Transaction nodes: inbound / outbound / transfer / custom_instruction / settlement / release
+function TransactionView({ data, type }) {
+  const isCustom = type === 'custom_instruction';
+  const isTransfer = type === 'transfer' || isCustom;
+
+  // custom_instruction: single account_id + from_address / to_address
+  // transfer:           from_account / to_account
+  // inbound/outbound:   no accounts in data (just amount + denomination)
+  const fromLabel = isCustom ? 'From address' : isTransfer ? 'From' : type === 'inbound' ? 'Internal' : 'Customer';
+  const toLabel   = isCustom ? 'To address'   : isTransfer ? 'To'   : type === 'inbound' ? 'Customer' : 'Internal';
+  const fromValue = isCustom
+    ? (data.from_address || '—')
+    : (data.from_account || data.client_transaction_id || '—');
+  const toValue   = isCustom ? (data.to_address || '—') : (data.to_account || '—');
+
+  return (
+    <DetailSection>
+      {data.timestamp && (
+        <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>
+      )}
+      {isCustom && data.account_id && (
+        <DetailRow label="Account ID" mono highlight>{data.account_id}</DetailRow>
+      )}
+      <div className="nd-tx-flow">
+        <div className="nd-tx-account nd-tx-from">
+          <span className="nd-tx-role muted">{fromLabel}</span>
+          <span className="nd-tx-acct-id">{fromValue}</span>
+        </div>
+        <div className="nd-tx-arrow">
+          <span className="nd-tx-amount">{fmtAmount(data.amount, data.denomination)}</span>
+          <span className="nd-tx-arrow-line">→</span>
+        </div>
+        <div className="nd-tx-account nd-tx-to">
+          <span className="nd-tx-role muted">{toLabel}</span>
+          <span className="nd-tx-acct-id">{toValue}</span>
+        </div>
+      </div>
+      {data.instruction_detail && data.instruction_detail.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <DetailLabel>Instruction details</DetailLabel>
+          <KVTable rows={data.instruction_detail} />
+        </div>
+      )}
+    </DetailSection>
+  );
+}
+
+// ── Smart param value renderer ──────────────────────────────────────────
+
+function fmtParamStr(s) {
+  // Numbers written with underscores (e.g. 100_000_000) → locale-formatted
+  if (/^-?\d[\d_]*(\.\d+)?$/.test(String(s))) {
+    const n = Number(String(s).replace(/_/g, ''));
+    if (!isNaN(n)) return n.toLocaleString('en-US');
+  }
+  return String(s);
+}
+
+function tryParseJSON(s) {
+  const t = String(s ?? '').trim();
+  if ((t.startsWith('[') || t.startsWith('{')) && (t.endsWith(']') || t.endsWith('}'))) {
+    try { return JSON.parse(t); } catch {}
+  }
+  return null;
+}
+
+function SmartValue({ value }) {
+  const s = String(value ?? '');
+  const parsed = tryParseJSON(s);
+
+  // Array of objects → mini table
+  if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object' && parsed[0] !== null) {
+    const keys = Object.keys(parsed[0]);
+    return (
+      <table className="nd-sub-table">
+        <thead><tr>{keys.map((k) => <th key={k}>{k.replace(/_/g, ' ')}</th>)}</tr></thead>
+        <tbody>
+          {parsed.map((row, i) => (
+            <tr key={i}>
+              {keys.map((k) => <td key={k}>{fmtParamStr(row[k] ?? '—')}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+
+  // Array of scalars → comma list
+  if (Array.isArray(parsed)) {
+    return (
+      <span className="nd-scalar-list">
+        {parsed.map((v, i) => (
+          <span key={i} className="nd-scalar-item">{fmtParamStr(v)}</span>
+        ))}
+      </span>
+    );
+  }
+
+  // Plain object → nested kv
+  if (parsed && typeof parsed === 'object') {
+    return (
+      <div className="nd-nested-kv">
+        {Object.entries(parsed).map(([k, v]) => (
+          <div key={k} className="nd-nested-row">
+            <span className="nd-nested-key">{k.replace(/_/g, ' ')}</span>
+            <span className="nd-nested-val">{fmtParamStr(v)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Scalar — format and display
+  return <span className="nd-scalar-val">{fmtParamStr(s) || '—'}</span>;
+}
+
+// Params list — stacks each param vertically so long keys/values have full width
+function ParamsView({ params, label = 'Parameters' }) {
+  if (!params || params.length === 0) return null;
+  return (
+    <DetailSection title={label}>
+      <div className="nd-params-list">
+        {params.map((p, i) => {
+          const key = p.name || p.key || '—';
+          const val = p.value;
+          const parsed = tryParseJSON(String(val ?? ''));
+          const isComplex = Array.isArray(parsed) || (parsed && typeof parsed === 'object');
+          return (
+            <div key={i} className={`nd-param-item${isComplex ? ' complex' : ''}`}>
+              <div className="nd-param-key">{key.replace(/_/g, '_​')}</div>
+              <div className="nd-param-val"><SmartValue value={val} /></div>
+            </div>
+          );
+        })}
+      </div>
+    </DetailSection>
+  );
+}
+
 // ── Node detail side panel (read-only) ────────────────────────────────────
 
 function NodeDetailPanel({ node, lineNumber, onClose, onRunScenario, runDisabled }) {
   const data = node.data._rawData || {};
-  const isScenario = node.data.type === 'scenario';
+  const type = node.data.type;
+  const isScenario = type === 'scenario';
+  const isBalanceCheck = type === 'balance_check' || type === 'balance_check_multi';
+  const isTx = ['inbound', 'outbound', 'transfer', 'custom_instruction', 'settlement', 'release'].includes(type);
 
-  const entries = Object.entries(data).filter(([k, v]) => {
-    if (k === 'steps' || k === 'instructions') return false;
-    if (Array.isArray(v) && v.length === 0) return false;
-    return true;
-  });
+  function renderBody() {
+    if (isBalanceCheck) {
+      return <BalanceCheckView data={data} />;
+    }
+    if (isTx) {
+      return <TransactionView data={data} type={type} />;
+    }
+    if (type === 'account') {
+      return (
+        <DetailSection>
+          <DetailRow label="Account ID" mono highlight>{data.account_id}</DetailRow>
+          {data.version_id && <DetailRow label="Version ID" mono>{data.version_id}</DetailRow>}
+          <ParamsView params={data.params || data.parameter_values} />
+        </DetailSection>
+      );
+    }
+    if (type === 'product') {
+      return (
+        <DetailSection>
+          <DetailRow label="Product" mono highlight>{data.name}</DetailRow>
+          {data.version_id && <DetailRow label="Version ID" mono>{data.version_id}</DetailRow>}
+          <ParamsView params={data.params} />
+        </DetailSection>
+      );
+    }
+    if (type === 'config') {
+      return (
+        <DetailSection>
+          <DetailRow label={data.key} mono highlight>{data.value}</DetailRow>
+        </DetailSection>
+      );
+    }
+    if (type === 'scenario') {
+      return (
+        <DetailSection>
+          {data.name && <DetailRow label="Name">{data.name}</DetailRow>}
+          {data.tags && <DetailRow label="Tags" mono muted>{data.tags}</DetailRow>}
+        </DetailSection>
+      );
+    }
+    if (type === 'schedule') {
+      return (
+        <DetailSection>
+          <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>
+          <DetailRow label="Account" mono highlight>{data.account_id}</DetailRow>
+          <DetailRow label="Event" mono>{data.event_id}</DetailRow>
+        </DetailSection>
+      );
+    }
+    if (type === 'notification') {
+      return (
+        <DetailSection>
+          <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>
+          <DetailRow label="Account" mono highlight>{data.account_id}</DetailRow>
+          <DetailRow label="Type" mono>{data.notification_type}</DetailRow>
+          {data.notification_details?.length > 0 && (
+            <ParamsView params={data.notification_details} label="Details" />
+          )}
+        </DetailSection>
+      );
+    }
+    if (type === 'flag' || type === 'flag_definition') {
+      return (
+        <DetailSection>
+          {data.timestamp && <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>}
+          <DetailRow label="Flag" mono highlight>{data.flag_name}</DetailRow>
+          {data.account_id && <DetailRow label="Account" mono>{data.account_id}</DetailRow>}
+          {data.expiry_timestamp && <DetailRow label="Expires" mono>{fmtTimestamp(data.expiry_timestamp)}</DetailRow>}
+        </DetailSection>
+      );
+    }
+    if (type === 'global_param') {
+      return (
+        <DetailSection>
+          {data.timestamp && <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>}
+          <DetailRow label="Parameter" mono highlight>{data.name}</DetailRow>
+          {data.value && <DetailRow label="Value" mono>{data.value}</DetailRow>}
+          {data.rows?.length > 0 && <ParamsView params={data.rows} label="Values" />}
+        </DetailSection>
+      );
+    }
+    if (type === 'derived_parameters' || type === 'derived_parameter_dict') {
+      return (
+        <DetailSection>
+          <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>
+          {data.account_id && <DetailRow label="Account" mono highlight>{data.account_id}</DetailRow>}
+          {data.param_name && <DetailRow label="Parameter" mono>{data.param_name}</DetailRow>}
+          <ParamsView params={data.rows} label="Expected values" />
+        </DetailSection>
+      );
+    }
+    if (type === 'update_account_status') {
+      return (
+        <DetailSection>
+          <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>
+          <DetailRow label="Account" mono highlight>{data.account_id}</DetailRow>
+          <DetailRow label="New status" mono>{data.status}</DetailRow>
+        </DetailSection>
+      );
+    }
+    if (type === 'change_instance_params' || type === 'change_template_params') {
+      return (
+        <DetailSection>
+          {data.account_id && <DetailRow label="Account" mono highlight>{data.account_id}</DetailRow>}
+          {data.product_version_id && <DetailRow label="Version" mono>{data.product_version_id}</DetailRow>}
+          <ParamsView params={data.params} label="Parameter changes" />
+        </DetailSection>
+      );
+    }
+    if (type === 'accepted' || type === 'rejected') {
+      return (
+        <DetailSection>
+          <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>
+          <DetailRow label="Account" mono highlight>{data.account_id}</DetailRow>
+          {data.rejection_type && <DetailRow label="Reason type" mono>{data.rejection_type}</DetailRow>}
+          {data.rejection_reason && <DetailRow label="Reason">{data.rejection_reason}</DetailRow>}
+        </DetailSection>
+      );
+    }
+    if (type === 'posting_instruction_batch') {
+      return (
+        <DetailSection>
+          {data.timestamp && <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>}
+          {data.instructions?.length > 0 && (
+            <DetailSection title={`Instructions (${data.instructions.length})`}>
+              {data.instructions.map((instr, i) => (
+                <div key={i} className="nd-instr-item">
+                  <span className="nd-instr-type">{instr.type || `#${i + 1}`}</span>
+                  {instr.amount && <span className="nd-instr-amount">{fmtAmount(instr.amount, instr.denomination)}</span>}
+                </div>
+              ))}
+            </DetailSection>
+          )}
+        </DetailSection>
+      );
+    }
+    if (type === 'instruction_detail_check' || type === 'batch_detail_check') {
+      return (
+        <DetailSection>
+          {data.timestamp && <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>}
+          {data.rows?.length > 0 && <KVTable rows={data.rows} />}
+        </DetailSection>
+      );
+    }
+    if (type === 'inbound_auth' || type === 'outbound_auth') {
+      return (
+        <DetailSection>
+          {data.timestamp && <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>}
+          <div className="nd-tx-flow">
+            <div className="nd-tx-account nd-tx-from">
+              <span className="nd-tx-role muted">{type === 'inbound_auth' ? 'Internal' : 'Customer'}</span>
+              <span className="nd-tx-acct-id">{data.from_account || '—'}</span>
+            </div>
+            <div className="nd-tx-arrow">
+              <span className="nd-tx-amount">{fmtAmount(data.amount, data.denomination)}</span>
+              <span className="nd-tx-arrow-line">→</span>
+            </div>
+            <div className="nd-tx-account nd-tx-to">
+              <span className="nd-tx-role muted">{type === 'inbound_auth' ? 'Customer' : 'Internal'}</span>
+              <span className="nd-tx-acct-id">{data.to_account || '—'}</span>
+            </div>
+          </div>
+          {data.client_transaction_id && <DetailRow label="TXN ID" mono>{data.client_transaction_id}</DetailRow>}
+        </DetailSection>
+      );
+    }
+    // Fallback: generic key-value
+    const entries = Object.entries(data).filter(([k, v]) => {
+      if (k === 'steps' || k === 'instructions') return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    });
+    return (
+      <DetailSection>
+        {entries.map(([k, v]) => (
+          <DetailRow key={k} label={k} mono>
+            {Array.isArray(v)
+              ? v.map((r, i) => (
+                  <span key={i} style={{ display: 'block', borderTop: i > 0 ? '1px solid #1e293b' : 'none', paddingTop: i > 0 ? 3 : 0 }}>
+                    {typeof r === 'object' ? Object.values(r).join(' · ') : String(r)}
+                  </span>
+                ))
+              : String(v ?? '—')}
+          </DetailRow>
+        ))}
+      </DetailSection>
+    );
+  }
 
   return (
     <div className="node-detail-overlay" onClick={onClose}>
-      <div className="node-detail-panel" onClick={(e) => e.stopPropagation()}>
+      <div className={`node-detail-panel${isBalanceCheck ? ' wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="node-detail-panel-header">
           <div className="node-detail-panel-title">
-            <span className={`node-type type-${node.data.type}`}>{node.data.type}</span>
+            <span className={`node-type type-${type}`}>{type}</span>
             <span className="node-detail-panel-name">{node.data.title}</span>
+            {node.data.subtitle && <span className="nd-subtitle">{node.data.subtitle}</span>}
           </div>
           <button className="run-output-close" onClick={onClose} title="Close">✕</button>
         </div>
@@ -293,22 +751,7 @@ function NodeDetailPanel({ node, lineNumber, onClose, onRunScenario, runDisabled
               ▶ Run this scenario
             </button>
           )}
-          <dl className="node-detail-kv">
-            {entries.map(([k, v]) => (
-              <div key={k} className="node-detail-row">
-                <dt>{k}</dt>
-                <dd>
-                  {Array.isArray(v)
-                    ? v.length === 0 ? '—' : v.map((row, i) => (
-                        <span key={i} className="detail-row-item">
-                          {typeof row === 'object' ? Object.values(row).join(' · ') : String(row)}
-                        </span>
-                      ))
-                    : String(v ?? '')}
-                </dd>
-              </div>
-            ))}
-          </dl>
+          {renderBody()}
         </div>
       </div>
     </div>
@@ -426,7 +869,7 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
             onClick={() => setDrawerOpen((v) => !v)}
             title="Toggle run results panel"
           >
-            {drawerOpen ? 'Hide results ▸' : '◂ Show results'}
+            {drawerOpen ? 'Hide results ▾' : '▴ Show results'}
           </button>
         )}
         <button
@@ -554,12 +997,78 @@ const _statusOf = (gaugeStatus) => {
   return null;
 };
 
-// Precise mapping (post-run): correlates each node's `_matchText` against the
-// authoritative gauge json-report tree (exact step text + pass/fail). This is
-// only available once the run finishes and gauge has (re)written result.json.
-// Returns both the status per node and — for failed nodes — the assertion
-// message straight from the json-report, so the diagram can surface "what
-// broke" without the user having to dig through the raw log.
+// ── Generic hook-failure node resolution ─────────────────────────────────
+// When afterScenarioHookFailure isn't a balance-check message, try to extract
+// an account_id + optional timestamp and match against accepted/rejected/
+// notification/flag/schedule/etc. nodes that carry those exact fields.
+// This is a best-effort heuristic — it will miss if the message doesn't
+// contain a quoted or bare account_id, but it's far better than always
+// falling back to the scenario header.
+
+const _ACCOUNT_ID_RE = /(?:account\s+(?:id|ID)\s+"?([A-Z0-9_]+)"?|"([A-Z][A-Z0-9_]{2,})")/;
+const _TS_RE = /(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2})?)/;
+
+function findGenericHookFailureNode(stepNodes, message) {
+  if (!message) return null;
+
+  // Extract fields from the error message
+  const acctMatch = (message || '').match(_ACCOUNT_ID_RE);
+  const acctId = acctMatch ? (acctMatch[1] || acctMatch[2]) : null;
+  const tsMatch = (message || '').match(_TS_RE);
+  const ts = tsMatch ? _normalizeTimestamp(tsMatch[1]) : null;
+
+  if (!acctId) return null;
+
+  // Node types that carry account_id and optionally timestamp
+  const CANDIDATE_TYPES = new Set([
+    'accepted', 'rejected', 'parameter_rejected',
+    'notification', 'no_notifications',
+    'derived_parameters', 'derived_parameter_dict',
+    'update_account_status', 'account_close', 'update_account_version',
+    'flag', 'schedule',
+    'change_instance_params', 'change_template_params',
+    'instruction_detail_check', 'batch_detail_check',
+  ]);
+
+  let bestMatch = null;
+  for (const node of stepNodes) {
+    if (!CANDIDATE_TYPES.has(node.data.type)) continue;
+    const raw = node.data._rawData || {};
+    const nodeAcctId = raw.account_id || raw.product_version_id;
+    if (nodeAcctId !== acctId) continue;
+    // If the message also has a timestamp, prefer the node that matches it
+    if (ts && raw.timestamp && _normalizeTimestamp(raw.timestamp) !== ts) continue;
+    bestMatch = node;
+    if (ts && raw.timestamp) break; // timestamp match is definitive
+  }
+  return bestMatch;
+}
+
+// Precise mapping (post-run): correlates diagram nodes against the
+// authoritative gauge json-report tree (status + error per step).
+//
+// MATCHING STRATEGY (three tiers, applied in order):
+//
+//   1. Positional (primary): diagram step nodes are in source order, gauge
+//      result.json items[] are in source order — node[i] maps to items[i].
+//      Robust even when multiple steps share identical text.
+//
+//   2. Line-number (secondary): gauge stores each step's spec file line via
+//      span.start; spec_parser tracks the same number. When positional would
+//      produce a wrong match (e.g. a "concept" item shifted the index), the
+//      line number breaks the tie.
+//
+//   3. Text fallback (tertiary): normalised substring match — kept as last
+//      resort for older reports that don't carry span.start.
+//
+// For afterScenarioHookFailure (balance assertions, accepted/rejected checks,
+// etc. that run in the @after_scenario hook and are not attached to any step):
+//
+//   a. Balance-check: parse the structured assertion message and match against
+//      the exact balance_check node + table row that was being verified.
+//   b. Generic: extract account_id + timestamp from the message and match
+//      against accepted/rejected/notification/etc. nodes.
+//   c. Fall back to the scenario header if nothing else matches.
 function buildPreciseStatusMap(nodes, runResult) {
   const statusMap = {};
   const errorMap = {};
@@ -609,27 +1118,60 @@ function buildPreciseStatusMap(nodes, runResult) {
     const st = _statusOf(scenarioResult.status);
     if (st) statusMap[block.scenarioNode.id] = st;
 
-    for (const stepNode of block.stepNodes) {
-      const stepMatchText = stepNode.data._matchText || stepNode.data.title;
-      const stepResult = scenarioResult.steps.find((st2) => _textsLooselyMatch(st2.text, stepMatchText));
-      const sst = stepResult && _statusOf(stepResult.status);
-      if (sst) statusMap[stepNode.id] = sst;
-      if (sst === 'failed' && stepResult?.error_message) errorMap[stepNode.id] = stepResult.error_message;
+    // Build a line-number → step-result map for secondary matching
+    const stepsByLine = {};
+    for (const s of scenarioResult.steps) {
+      if (s.line != null) stepsByLine[s.line] = s;
     }
 
-    // Hook-level failure (gauge attaches balance/teardown assertions to the
-    // scenario, not a step) — try to resolve it down to the exact
-    // balance-check node + row it was actually checking; only fall back to
-    // pinning the message on the scenario header when that's not possible.
+    block.stepNodes.forEach((stepNode, i) => {
+      // 1. Positional match
+      let stepResult = scenarioResult.steps[i];
+
+      // 2. Line-number override: if the node has a _specLine AND the positional
+      //    match's line disagrees with it (or positional is out of bounds),
+      //    prefer the step that the spec file line number points to.
+      const nodeLine = stepNode.data._specLine;
+      if (nodeLine != null && stepsByLine[nodeLine]) {
+        const lineResult = stepsByLine[nodeLine];
+        if (!stepResult || (stepResult.line != null && stepResult.line !== nodeLine)) {
+          stepResult = lineResult;
+        }
+      }
+
+      // 3. Text fallback when both above yielded nothing (e.g. old report)
+      if (!stepResult) {
+        const stepMatchText = stepNode.data._matchText || stepNode.data.title;
+        stepResult = scenarioResult.steps.find((s) => _textsLooselyMatch(s.text, stepMatchText));
+      }
+
+      const sst = stepResult && _statusOf(stepResult.status);
+      if (sst) statusMap[stepNode.id] = sst;
+      if (sst === 'failed' && stepResult?.error_message) {
+        errorMap[stepNode.id] = stepResult.error_message;
+      }
+    });
+
+    // ── Hook-level failure resolution ─────────────────────────────────────
     if (st === 'failed' && scenarioResult.hook_failure) {
       const message = scenarioResult.hook_failure.error_message;
-      const failure = parseBalanceCheckFailure(message);
-      const match = failure && findBalanceCheckMatch(block.stepNodes, failure);
-      if (match) {
-        statusMap[match.node.id] = 'failed';
-        errorMap[match.node.id] = `Row ${match.rowIndex + 1}/${match.totalRows} — ${message}`;
+
+      // a. Balance-check: structured assertion message with acct/addr/denom/asset
+      const balFailure = parseBalanceCheckFailure(message);
+      const balMatch = balFailure && findBalanceCheckMatch(block.stepNodes, balFailure);
+      if (balMatch) {
+        statusMap[balMatch.node.id] = 'failed';
+        errorMap[balMatch.node.id] = `Row ${balMatch.rowIndex + 1}/${balMatch.totalRows} — ${message}`;
       } else {
-        errorMap[block.scenarioNode.id] = message;
+        // b. Generic: extract account_id + timestamp → accepted/rejected/etc.
+        const genericNode = findGenericHookFailureNode(block.stepNodes, message);
+        if (genericNode) {
+          statusMap[genericNode.id] = 'failed';
+          errorMap[genericNode.id] = message;
+        } else {
+          // c. Fall back to scenario header
+          errorMap[block.scenarioNode.id] = message;
+        }
       }
     }
   }
@@ -764,7 +1306,7 @@ function SpecVisual({ parsed, scenarioLineList, onRunScenario, runDisabled, runS
         onNodeClick={(_, node) => setSelectedNode(node)}
         onInit={(instance) => { flowInstanceRef.current = instance; }}
       >
-        <Background color="#1e293b" gap={16} />
+        <Background color="#1a2740" gap={32} size={1.5} />
         <Controls position="top-right" />
       </ReactFlow>
 

@@ -15,7 +15,7 @@ def parse_spec_content(content: str) -> dict[str, Any]:
     def target_steps() -> list[dict[str, Any]]:
         return current["raw_steps"] if current is not None else setup_raw
 
-    for line in content.splitlines():
+    for line_num, line in enumerate(content.splitlines(), start=1):
         if line.startswith("# ") and not line.startswith("## "):
             if current_step is not None:
                 _trim_trailing_blank_source(current_step)
@@ -25,7 +25,7 @@ def parse_spec_content(content: str) -> dict[str, Any]:
         if line.startswith("## "):
             if current_step is not None:
                 _trim_trailing_blank_source(current_step)
-            current = {"name": line[3:].strip(), "tags": [], "raw_steps": []}
+            current = {"name": line[3:].strip(), "tags": [], "raw_steps": [], "_line": line_num}
             current_step = None
             scenarios.append(current)
             continue
@@ -42,7 +42,7 @@ def parse_spec_content(content: str) -> dict[str, Any]:
         elif line.startswith("* "):
             if current_step is not None:
                 _trim_trailing_blank_source(current_step)
-            current_step = {"text": line[2:].strip(), "table_rows": [], "source_lines": [line]}
+            current_step = {"text": line[2:].strip(), "table_rows": [], "source_lines": [line], "_line": line_num}
             target_steps().append(current_step)
         elif stripped.startswith("|") and current_step is not None and not current_step.get("free_text"):
             current_step["table_rows"].append(stripped)
@@ -69,6 +69,7 @@ def parse_spec_content(content: str) -> dict[str, Any]:
             return {
                 "type": "other",
                 "raw": "",
+                "line": step.get("_line"),
                 "data": {
                     "raw_text": step["free_text"],
                     "is_free_text": True,
@@ -77,12 +78,14 @@ def parse_spec_content(content: str) -> dict[str, Any]:
             }
         parsed_step = _parse_step(step["text"], step["table_rows"])
         parsed_step.setdefault("data", {})["_source_lines"] = source_lines
+        parsed_step["line"] = step.get("_line")
         return parsed_step
 
     parsed_scenarios = [
         {
             "name": scenario["name"],
             "tags": scenario["tags"],
+            "line": scenario.get("_line"),
             "steps": [_parse_raw_step(step) for step in scenario["raw_steps"]],
         }
         for scenario in scenarios
@@ -551,15 +554,19 @@ def _parse_release(text: str, table: list[dict[str, str]]) -> dict[str, Any]:
 # ── Custom Instruction ────────────────────────────────────────────────────────
 
 def _parse_custom_instruction(text: str, table: list[dict[str, str]]) -> dict[str, Any]:
+    # Actual spec format (confirmed from specs in the wild):
+    #   At "<ts>", initiate a Custom Instruction of "<amount>" "<denom>"
+    #   of account ID "<account_id>"
+    #   from address "<from_address>" to address "<to_address>"
+    #   with instruction detail:  [table]
     amount = re.search(r'"([\d_,.]+)"\s+"([A-Z]+)"', text)
     return {
         "timestamp": _first(r'At "([^"]+)"', text),
         "amount": _clean_amount(amount.group(1) if amount else "0"),
         "denomination": amount.group(2) if amount else "VND",
-        "debtor_account_id": _first(r'from debtor account ID "([^"]+)"', text),
-        "debtor_account_address": _first(r'debtor account ID "[^"]+" with address "([^"]+)"', text),
-        "creditor_account_id": _first(r'to creditor account ID "([^"]+)"', text),
-        "creditor_account_address": _first(r'creditor account ID "[^"]+" with address "([^"]+)"', text),
+        "account_id": _first(r'account ID "([^"]+)"', text),
+        "from_address": _first(r'from address "([^"]+)"', text),
+        "to_address": _first(r'to address "([^"]+)"', text),
         "instruction_detail": _key_value_rows(table),
     }
 

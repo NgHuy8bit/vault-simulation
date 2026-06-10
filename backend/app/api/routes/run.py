@@ -95,9 +95,14 @@ def _load_json_report(smart_contracts_dir) -> Optional[dict]:
                     continue
                 res = item.get("result") or {}
                 status = res.get("status", "notExecuted")
+                # `span.start` is the 1-based line number of this step in the
+                # .spec file — gauge includes it in the json-report and it maps
+                # 1:1 to the `line` field the spec_parser stores per step.
+                span = item.get("span") or {}
                 step = {
                     "text": item.get("stepText", ""),
                     "status": status,
+                    "line": span.get("start"),   # 1-based spec line, or None
                 }
                 if status == "failed":
                     step["error_message"] = res.get("errorMessage", "")
