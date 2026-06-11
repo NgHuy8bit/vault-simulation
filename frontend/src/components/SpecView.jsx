@@ -659,17 +659,49 @@ function NodeDetailPanel({ node, lineNumber, onClose, onRunScenario, runDisabled
       );
     }
     if (type === 'posting_instruction_batch') {
+      const instructions = data.instructions || [];
       return (
         <DetailSection>
           {data.timestamp && <DetailRow label="Timestamp" mono>{fmtTimestamp(data.timestamp)}</DetailRow>}
-          {data.instructions?.length > 0 && (
-            <DetailSection title={`Instructions (${data.instructions.length})`}>
-              {data.instructions.map((instr, i) => (
-                <div key={i} className="nd-instr-item">
-                  <span className="nd-instr-type">{instr.type || `#${i + 1}`}</span>
-                  {instr.amount && <span className="nd-instr-amount">{fmtAmount(instr.amount, instr.denomination)}</span>}
-                </div>
-              ))}
+          {instructions.length > 0 && (
+            <DetailSection title={`Instructions (${instructions.length})`}>
+              {instructions.map((instr, i) => {
+                // Spec uses two column-name patterns:
+                //   "initiate an instruction batch" → instruction_type / amount / denomination /
+                //                                     creditor_account_id / debtor_account_id
+                //   "make a posting instruction batch" → posting_type / instruction_attribute /
+                //                                        client_transaction_id
+                const instrType = instr.instruction_type || instr.posting_type || `#${i + 1}`;
+                const amount    = instr.amount;
+                const denom     = instr.denomination;
+                const creditor  = instr.creditor_account_id;
+                const debtor    = instr.debtor_account_id;
+                const txnId     = instr.client_transaction_id;
+                const attr      = instr.instruction_attribute;
+                return (
+                  <div key={i} className="nd-instr-item">
+                    <div className="nd-instr-row">
+                      <span className="nd-instr-type">{instrType}</span>
+                      {amount && (
+                        <span className="nd-instr-amount">{fmtAmount(amount, denom)}</span>
+                      )}
+                    </div>
+                    {(debtor || creditor) && (
+                      <div className="nd-instr-accounts">
+                        <span className="nd-instr-acct debtor">{debtor || '—'}</span>
+                        <span className="nd-instr-arrow">→</span>
+                        <span className="nd-instr-acct creditor">{creditor || '—'}</span>
+                      </div>
+                    )}
+                    {txnId && (
+                      <div className="nd-instr-txn">TXN #{txnId}</div>
+                    )}
+                    {attr && (
+                      <div className="nd-instr-attr">{attr}</div>
+                    )}
+                  </div>
+                );
+              })}
             </DetailSection>
           )}
         </DetailSection>
@@ -728,6 +760,57 @@ function NodeDetailPanel({ node, lineNumber, onClose, onRunScenario, runDisabled
     );
   }
 
+  function renderError() {
+    const msg = node.data.runError;
+    if (!msg) return null;
+    const diff = parseBalanceDiff(msg);
+    if (diff) {
+      return (
+        <div className="nd-run-error">
+          <div className="nd-run-error-title">⚠ Balance Mismatch</div>
+          {diff.description && <div className="nd-run-error-desc">{diff.description}</div>}
+          <table className="nd-balance-diff-table">
+            <thead>
+              <tr>
+                <th>Address</th>
+                <th>Denom</th>
+                <th>Phase</th>
+                <th className="nd-bd-num">Expected</th>
+                <th className="nd-bd-num">Actual</th>
+                <th className="nd-bd-num">Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {diff.diffs.map((d, i) => {
+                const exp = parseFloat(d.expected);
+                const act = parseFloat(d.actual);
+                const delta = act - exp;
+                return (
+                  <tr key={i}>
+                    <td className="nd-bd-addr">{d.dims.address || '—'}</td>
+                    <td className="nd-bd-denom">{d.dims.denomination || '—'}</td>
+                    <td className="nd-bd-phase">{(d.dims.phase || '').replace('POSTING_PHASE_', '')}</td>
+                    <td className="nd-bd-num nd-bd-expected">{Number(d.expected).toLocaleString()}</td>
+                    <td className="nd-bd-num nd-bd-actual">{Number(d.actual).toLocaleString()}</td>
+                    <td className={`nd-bd-num nd-bd-delta ${delta >= 0 ? 'nd-bd-pos' : 'nd-bd-neg'}`}>
+                      {delta > 0 ? '+' : ''}{delta.toLocaleString()}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    return (
+      <div className="nd-run-error">
+        <div className="nd-run-error-title">⚠ Failure</div>
+        <div className="nd-run-error-message">{msg}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="node-detail-overlay" onClick={onClose}>
       <div className={`node-detail-panel${isBalanceCheck ? ' wide' : ''}`} onClick={(e) => e.stopPropagation()}>
@@ -740,6 +823,8 @@ function NodeDetailPanel({ node, lineNumber, onClose, onRunScenario, runDisabled
           <button className="run-output-close" onClick={onClose} title="Close">✕</button>
         </div>
         <div className="node-detail-panel-body">
+          {/* Error banner — shown prominently at the top when this node failed */}
+          {renderError()}
           {isScenario && (
             <button
               className="primary"
@@ -760,7 +845,7 @@ function NodeDetailPanel({ node, lineNumber, onClose, onRunScenario, runDisabled
 
 // ── Main SpecView ─────────────────────────────────────────────────────────
 
-export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
+export function SpecView({ scenario, spec, summary, onReload, onSpecSaved, runStateCache }) {
   const [mode, setMode] = useState('visual');
   const [editing, setEditing] = useState(false);
   const [runLines, setRunLines] = useState(null);
@@ -772,6 +857,55 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
   const [highlightLine, setHighlightLine] = useState(null);
   const sourceLineRefs = useRef([]);
 
+  // ── Run state persistence ────────────────────────────────────────────────
+  // Restore saved run state when the spec changes (or when this component
+  // remounts after a tab switch). Save whenever run state changes so that
+  // navigating away and back doesn't lose the last run result.
+  const specPath = spec?.path ?? null;
+
+  useEffect(() => {
+    if (!runStateCache?.current) return;
+    if (!specPath) {
+      setRunLines(null);
+      setRunStatus(null);
+      setRunProgress(null);
+      setRunResult(null);
+      setRunTargetScenarioIndex(null);
+      setDrawerOpen(false);
+      return;
+    }
+    const cached = runStateCache.current.get(specPath);
+    if (cached) {
+      setRunLines(cached.runLines ?? null);
+      setRunStatus(cached.runStatus ?? null);
+      setRunProgress(cached.runProgress ?? null);
+      setRunResult(cached.runResult ?? null);
+      setRunTargetScenarioIndex(cached.runTargetScenarioIndex ?? null);
+      setDrawerOpen(cached.drawerOpen ?? false);
+    } else {
+      setRunLines(null);
+      setRunStatus(null);
+      setRunProgress(null);
+      setRunResult(null);
+      setRunTargetScenarioIndex(null);
+      setDrawerOpen(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specPath]);
+
+  useEffect(() => {
+    if (!runStateCache?.current || !specPath) return;
+    runStateCache.current.set(specPath, {
+      runLines,
+      runStatus,
+      runProgress,
+      runResult,
+      runTargetScenarioIndex,
+      drawerOpen,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specPath, runLines, runStatus, runProgress, runResult, runTargetScenarioIndex, drawerOpen]);
+
   // Progressive parse of the raw streamed console lines — this is the same
   // mechanism that already animates the scenario tick-list one row at a
   // time, so it's the most reliable "what has finished so far" live source.
@@ -780,6 +914,15 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
   const scenarioLineList = useMemo(() => extractScenarioLineList(spec?.content), [spec?.content]);
   const stepLines = useMemo(() => extractStepLines(spec?.content), [spec?.content]);
   const sourceLines = useMemo(() => (spec?.content ? spec.content.split('\n') : []), [spec?.content]);
+
+  // When a specific scenario is selected from the sidebar (not just the file),
+  // filter the diagram to show only that scenario + setup nodes.
+  // null = show all scenarios.
+  const filterScenarioIndex = useMemo(() => {
+    if (!scenario || scenario.type !== 'scenario' || scenario.lineNumber == null) return null;
+    const idx = scenarioLineList.indexOf(scenario.lineNumber);
+    return idx >= 0 ? idx : null;
+  }, [scenario, scenarioLineList]);
 
   function jumpToLine(lineNumber) {
     setMode('source');
@@ -839,6 +982,7 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
       <SpecNodeEditor
         spec={spec}
         summary={summary}
+        scenarioIndex={filterScenarioIndex}
         onCancel={() => setEditing(false)}
         onSaved={async () => {
           await onSpecSaved();
@@ -880,7 +1024,9 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
         >
           {runStatus === 'running' ? '● Running' : '▶ Run All'}
         </button>
-        <button className="primary" onClick={() => setEditing(true)}>Edit spec</button>
+        <button className="primary" onClick={() => setEditing(true)}>
+          {filterScenarioIndex != null ? 'Edit scenario' : 'Edit spec'}
+        </button>
       </div>
 
       <div className="spec-body">
@@ -908,6 +1054,7 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved }) {
               parsedRunOutput={parsedRunOutput}
               runResult={runResult}
               runTargetScenarioIndex={runTargetScenarioIndex}
+              filterScenarioIndex={filterScenarioIndex}
             />
           )}
         </div>
@@ -968,6 +1115,30 @@ function parseBalanceCheckFailure(message) {
   const m = (message || '').match(_BALANCE_FAILURE_RE);
   if (!m) return null;
   return { timestamp: m[1].trim(), account_id: m[2], address: m[3], denomination: m[4], asset: m[5] };
+}
+
+// Parse the Python AssertionError message that inception_sdk throws on balance mismatch.
+// Format: "<description>: {BalanceDimensions(address='X', ...): {'expected': Decimal('A'), 'actual': Decimal('B')}, ...}"
+function parseBalanceDiff(message) {
+  if (!message) return null;
+  const re = /BalanceDimensions\(([^)]+)\):\s*\{['"]expected['"]:\s*Decimal\(['"]([^'"]+)['"]\),\s*['"]actual['"]:\s*Decimal\(['"]([^'"]+)['"]\)\}/g;
+  const diffs = [];
+  let m;
+  while ((m = re.exec(message)) !== null) {
+    const dims = {};
+    m[1].split(',').forEach(part => {
+      const eq = part.indexOf('=');
+      if (eq < 0) return;
+      const k = part.slice(0, eq).trim();
+      const v = part.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+      dims[k] = v;
+    });
+    diffs.push({ dims, expected: m[2], actual: m[3] });
+  }
+  if (diffs.length === 0) return null;
+  const cutIdx = message.indexOf(': {BalanceDimensions');
+  const description = cutIdx > 0 ? message.slice(0, cutIdx) : null;
+  return { description, diffs };
 }
 
 // Search the scenario's own step nodes (never across scenarios — a failure
@@ -1247,9 +1418,74 @@ function buildNodeStatusMap(nodes, runStatus, parsedOutput, runResult, targetSce
   return { statusMap: buildLiveStatusMap(nodes, runStatus, parsedOutput, targetScenarioIndex), errorMap: {} };
 }
 
-function SpecVisual({ parsed, scenarioLineList, onRunScenario, runDisabled, runStatus, parsedRunOutput, runResult, runTargetScenarioIndex }) {
+function SpecVisual({ parsed, scenarioLineList, onRunScenario, runDisabled, runStatus, parsedRunOutput, runResult, runTargetScenarioIndex, filterScenarioIndex }) {
   const [selectedNode, setSelectedNode] = useState(null);
-  const { nodes: rawNodes, edges } = useMemo(() => specToFlow(parsed), [parsed]);
+  const { nodes: rawNodes, edges, lanes, laneGap } = useMemo(() => specToFlow(parsed), [parsed]);
+
+  // Clear the selected node when the scenario filter changes (the previously
+  // selected node may not be visible in the new filter view).
+  useEffect(() => {
+    setSelectedNode(null);
+  }, [filterScenarioIndex]);
+
+  // ── Scenario filter: show only setup + target scenario ────────────────────
+  // When a specific scenario is chosen from the sidebar, hide all other
+  // scenario lanes and shift the target lane up so there is no empty gap.
+  const { filteredNodes, filteredEdges } = useMemo(() => {
+    if (filterScenarioIndex == null) {
+      return { filteredNodes: rawNodes, filteredEdges: edges };
+    }
+
+    // Locate the target scenario node (0-based scenarioIndex in source order)
+    const targetScenarioNode = rawNodes.find(
+      (n) => n.data.type === 'scenario' && n.data.scenarioIndex === filterScenarioIndex,
+    );
+    if (!targetScenarioNode) {
+      return { filteredNodes: rawNodes, filteredEdges: edges };
+    }
+
+    const targetLaneId = targetScenarioNode.data.lane;
+
+    // A "setup" lane is any lane that contains no scenario-header node.
+    const scenarioLaneIds = new Set(
+      rawNodes.filter((n) => n.data.type === 'scenario').map((n) => n.data.lane),
+    );
+    const setupLaneIds = new Set(
+      rawNodes.filter((n) => !scenarioLaneIds.has(n.data.lane)).map((n) => n.data.lane),
+    );
+
+    const keepLaneIds = new Set([...setupLaneIds, targetLaneId]);
+    const kept = rawNodes.filter((n) => keepLaneIds.has(n.data.lane));
+
+    // Re-position: shift the target scenario lane to sit immediately below
+    // the setup lane (or at the very top if there is no setup lane), so
+    // fitView shows a compact diagram without a large vertical gap.
+    const setupLane = lanes.find((l) => l.name === 'Setup');
+    const targetLane = lanes.find((l) => l.id === targetLaneId);
+
+    if (targetLane && targetLane.y !== (setupLane ? setupLane.y + laneGap : targetLane.y)) {
+      const newTargetY = setupLane ? setupLane.y + laneGap : targetLane.y;
+      const yOffset = newTargetY - targetLane.y;
+
+      const repositioned = kept.map((n) =>
+        setupLaneIds.has(n.data.lane)
+          ? n
+          : { ...n, position: { ...n.position, y: n.position.y + yOffset } },
+      );
+
+      const keptIds = new Set(repositioned.map((n) => n.id));
+      return {
+        filteredNodes: repositioned,
+        filteredEdges: edges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target)),
+      };
+    }
+
+    const keptIds = new Set(kept.map((n) => n.id));
+    return {
+      filteredNodes: kept,
+      filteredEdges: edges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target)),
+    };
+  }, [rawNodes, edges, lanes, laneGap, filterScenarioIndex]);
 
   const { statusMap: nodeStatusMap, errorMap: nodeErrorMap } = useMemo(
     () => buildNodeStatusMap(rawNodes, runStatus, parsedRunOutput, runResult, runTargetScenarioIndex),
@@ -1257,52 +1493,72 @@ function SpecVisual({ parsed, scenarioLineList, onRunScenario, runDisabled, runS
   );
 
   const nodes = useMemo(
-    () => rawNodes.map((n) => {
+    () => filteredNodes.map((n) => {
       const status = nodeStatusMap[n.id];
       const error = nodeErrorMap[n.id] || null;
       if (!status && !n.data.runStatus && !n.data.runError) return n;
       return { ...n, data: { ...n.data, runStatus: status, runError: error } };
     }),
-    [rawNodes, nodeStatusMap, nodeErrorMap]
+    [filteredNodes, nodeStatusMap, nodeErrorMap]
   );
 
   const failedNodes = useMemo(() => nodes.filter((n) => n.data.runStatus === 'failed'), [nodes]);
 
-  // Auto-pan the diagram so the node that needs attention stays in view —
-  // while running, follow the currently-executing node; once the run lands,
-  // jump straight to the first failure so the user sees what broke without
-  // hunting through a dense diagram.
   const flowInstanceRef = useRef(null);
+
+  // Effect 1 — fit view when the visible node set changes (scenario filter
+  // applied or spec first loaded). Uses a 120 ms delay so ReactFlow has
+  // finished measuring and repositioning nodes before we fit.
+  // Skipped while a run is active so it doesn't fight the run-tracking pan.
+  const runStatusRef = useRef(runStatus);
+  useEffect(() => { runStatusRef.current = runStatus; }, [runStatus]);
+
+  useEffect(() => {
+    if (runStatusRef.current === 'running' || runStatusRef.current === 'failed') return;
+    const instance = flowInstanceRef.current;
+    if (!instance || filteredNodes.length === 0) return;
+    const id = setTimeout(() => instance.fitView?.({ padding: 0.2 }), 120);
+    return () => clearTimeout(id);
+  }, [filteredNodes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Effect 2 — follow the active / failed node while a run is in progress
+  // or has just completed.
+  //
+  //  • running  → track the currently-executing step with setCenter
+  //  • failed, filtered view  → fitView all scenario nodes so nothing falls
+  //      off-screen (balance checks sit at the far right of the lane)
+  //  • failed, full-spec view → setCenter on the failing node
   useEffect(() => {
     const instance = flowInstanceRef.current;
-    if (!instance?.setCenter) return;
+    if (!instance) return;
 
-    let target = null;
     if (runStatus === 'running') {
-      target = nodes.find((n) => n.data.runStatus === 'running');
+      const target = nodes.find((n) => n.data.runStatus === 'running');
+      if (target && instance.setCenter) {
+        instance.setCenter(target.position.x + 140, target.position.y + 40, { zoom: 0.85, duration: 450 });
+      }
     } else if (runStatus === 'failed' && failedNodes.length > 0) {
-      // Prefer landing on the node carrying the actual error message (the
-      // precisely-resolved failing step) over the scenario header it rolls
-      // up to — that's the node the user actually needs to look at.
-      target = failedNodes.find((n) => n.data.runError) || failedNodes[0];
+      const target = failedNodes.find((n) => n.data.runError) || failedNodes[0];
+      // Defer to let ReactFlow finish committing node-status updates to the DOM
+      const id = setTimeout(() => {
+        if (filterScenarioIndex != null) {
+          instance.fitView?.({ padding: 0.15, duration: 400 });
+        } else if (target) {
+          instance.setCenter?.(target.position.x + 140, target.position.y + 40, { zoom: 0.85, duration: 400 });
+        }
+      }, 120);
+      return () => clearTimeout(id);
     }
-    if (target) {
-      const x = target.position.x + 140;
-      const y = target.position.y + 40;
-      instance.setCenter(x, y, { zoom: 0.85, duration: 450 });
-    }
-  }, [nodes, runStatus, failedNodes]);
+  }, [nodes, runStatus, failedNodes, filterScenarioIndex]);
 
   return (
     <div className="spec-visual">
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={filteredEdges}
         nodeTypes={nodeTypes}
         nodesDraggable={false}
         nodesConnectable={false}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
         onNodeClick={(_, node) => setSelectedNode(node)}
         onInit={(instance) => { flowInstanceRef.current = instance; }}
       >

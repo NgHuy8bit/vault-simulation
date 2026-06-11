@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
 # Entrypoint for the dedicated simulation-viewer runner container.
 #
-# This container is a self-contained Linux environment (built from the same
-# Dockerfile as the smart-contracts devcontainer) that:
-#   1. Sets up the smart-contracts toolchain (uv venv, bun deps, Gauge Python
-#      plugin) — same as `script/setup` does inside VS Code's devcontainer.
-#   2. Runs the FastAPI viewer backend directly, so `gauge run` executes as a
-#      plain local subprocess. No `docker exec`, no VS Code dependency.
+# All slow work (uv sync, gauge plugin, Python downloads) is done at image
+# BUILD time (see simulation-viewer/runner/Dockerfile). This script only
+# handles the few things that require the bind-mounted source tree to exist:
 #
-# Git auth for the private `contracts-api` dependency:
-#   `uv sync` needs to clone github.com/GalaxyFinX/smart-contracts. Provide a
-#   GitHub Personal Access Token via the GITHUB_TOKEN env var (see .env.example
-#   in this directory) — we turn it into a `~/.git-credentials` entry below.
-#   This mirrors what VS Code's Remote-Containers credential helper does, just
-#   with an explicit token instead of proxying your IDE's session.
+#   1. Git credentials          — runtime secret from .env
+#   2. bun install              — creates node_modules in the bind-mount (~100 ms,
+#                                  bun's package cache is pre-warmed in the image)
+#   3. sitecustomize.py symlink — must point into the live smart-contracts tree
+#   4. Start uvicorn
 set -euo pipefail
 
 export PATH="/home/vscode/.local/bin:/home/vscode/.bun/bin:${PATH}"
+export UV_PROJECT_ENVIRONMENT="/opt/sc-venv"
+export GAUGE_PYTHON_COMMAND="/opt/sc-venv/bin/python"
 
 SC_DIR="/workspaces/smart-contracts"
-SC_VENV_DIR="/opt/sc-venv"      # runner's private venv — OUTSIDE smart-contracts
 VIEWER_BACKEND_DIR="/opt/viewer-backend"
-VENV_DIR="${VIEWER_BACKEND_DIR}/.venv-runner"
-SETUP_STAMP="${SC_DIR}/.viewer-runner-setup-ok"
+VIEWER_BACKEND_VENV="/opt/viewer-backend-venv"   # pre-built in Docker image
 
-# ── 1. Git credentials for private deps ────────────────────────────────────
+# ── 1. Git credentials for any runtime git operations ──────────────────────
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     git config --global credential.helper store
     echo "https://${GITHUB_USER:-x-access-token}:${GITHUB_TOKEN}@github.com" > "${HOME}/.git-credentials"
@@ -34,53 +30,23 @@ git config --global user.email "${GIT_USER_EMAIL:-viewer-runner@local}"
 git config --global user.name "${GIT_USER_NAME:-viewer-runner}"
 git config --global --add safe.directory "$SC_DIR"
 
-# ── 2. One-time smart-contracts toolchain setup ─────────────────────────────
-# The runner's Python venv lives at SC_VENV_DIR (/opt/sc-venv), which is
-# bind-mounted from ./runner/.venv-sc — completely outside the shared
-# smart-contracts checkout. This means smart-contracts/.venv is NEVER
-# touched by this container, so the VS Code devcontainer's own venv is
-# always left intact.
-#
-# UV_PROJECT_ENVIRONMENT=/opt/sc-venv tells `uv sync` to create/use the
-# venv there instead of the default smart-contracts/.venv.
-# GAUGE_PYTHON_COMMAND=/opt/sc-venv/bin/python overrides the path hardcoded
-# in config/gauge/default/python.properties so gauge uses the same venv.
-# Both env vars are set in docker-compose.yml and re-exported here for
-# subprocesses (script/setup calls uv, which inherits UV_PROJECT_ENVIRONMENT).
-export UV_PROJECT_ENVIRONMENT="${SC_VENV_DIR}"
-export GAUGE_PYTHON_COMMAND="${SC_VENV_DIR}/bin/python"
+# ── 2. bun install (fast — package cache pre-warmed in image) ──────────────
+cd "$SC_DIR"
+echo "==> Installing bun.sh dependencies…"
+bun install --frozen-lockfile 2>/dev/null || bun install
 
-venv_python_ok() {
-    "${SC_VENV_DIR}/bin/python" --version >/dev/null 2>&1
-}
+echo "==> Setting up Lefthook…"
+bunx lefthook install --force
 
-if [ -f "$SETUP_STAMP" ] && venv_python_ok; then
-    echo "==> smart-contracts setup already done and venv looks healthy — skipping."
-else
-    if [ -f "$SETUP_STAMP" ]; then
-        echo "==> Stamp says setup is done, but venv's Python is broken (stale symlink after cache wipe) — re-running setup…"
-        rm -f "$SETUP_STAMP"
-    else
-        echo "==> Running smart-contracts setup (first run only — this can take a while)…"
-    fi
-    # /opt/sc-venv is a bind-mount point so uv can't rm-rf the directory
-    # itself — clear its contents first so uv finds an empty dir to populate.
-    find "${SC_VENV_DIR}" -mindepth 1 -delete 2>/dev/null || true
-    (cd "$SC_DIR" && DOCKER_ENVIRONMENT=1 ./script/setup) && touch "$SETUP_STAMP" \
-        || echo "!! smart-contracts setup failed — gauge run will likely fail until this is fixed. Re-run: docker compose exec viewer-runner bash -lc 'cd /workspaces/smart-contracts && ./script/setup'"
-fi
+# ── 3. sitecustomize.py symlink ────────────────────────────────────────────
+# Must point into the live bind-mounted source tree, not the build-time copy.
+echo "==> Linking sitecustomize.py…"
+SITE_PACKAGES="$(uv run python -c 'import site; print(site.getsitepackages()[0])')"
+ln -sf "${SC_DIR}/config/sitecustomize.py" "${SITE_PACKAGES}/sitecustomize.py"
 
-# ── 3. Viewer backend's own deps (fastapi, uvicorn…) ────────────────────────
+# ── 4. Start backend ────────────────────────────────────────────────────────
 cd "$VIEWER_BACKEND_DIR"
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-    echo "==> Creating virtualenv for viewer backend…"
-    CACHED_311="$(uv python list --only-installed 2>/dev/null | awk '/^cpython-3\.11/{print $1; exit}')"
-    uv venv "$VENV_DIR" --python "${CACHED_311:-3.11}"
-fi
 # shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
-echo "==> Installing viewer backend dependencies…"
-uv pip install -q -r requirements.txt
-
+source "${VIEWER_BACKEND_VENV}/bin/activate"
 echo "==> Starting uvicorn on 0.0.0.0:8000…"
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000

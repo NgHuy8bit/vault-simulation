@@ -36,6 +36,7 @@ const TYPE_ACCENT = {
   parameter_rejected:     'accent-outbound',
   instruction_detail_check: 'accent-balance',
   batch_detail_check:     'accent-balance',
+  other:                  'accent-other',
 };
 
 function fmtTs(ts) {
@@ -238,16 +239,33 @@ function NodeExtra({ type, raw }) {
     return fmtTs(raw.timestamp) ? <MetaRow icon="◷">{fmtTs(raw.timestamp)}</MetaRow> : null;
   }
 
+  if (type === 'posting_instruction_batch') {
+    const instrs = raw.instructions || [];
+    // Collect unique instruction types — two column-name patterns appear in specs:
+    //   "initiate an instruction batch with:" → instruction_type column
+    //   "make a posting instruction batch with:..." → posting_type column
+    const types = [...new Set(
+      instrs.map((i) => i.instruction_type || i.posting_type || '').filter(Boolean),
+    )];
+    return (
+      <>
+        {fmtTs(raw.timestamp) && <MetaRow icon="◷">{fmtTs(raw.timestamp)}</MetaRow>}
+        {types.length > 0 && <MetaRow icon="⇄">{types.join(' · ')}</MetaRow>}
+      </>
+    );
+  }
+
   return null;
 }
 
 export function SpecCustomNode({ data, isConnectable }) {
   const isScenario = data.type === 'scenario';
+  const isAnnotation = data.type === 'other';
   const runStatusClass = data.runStatus ? `run-status-${data.runStatus}` : '';
   const accentClass = TYPE_ACCENT[data.type] || 'accent-config';
 
   return (
-    <div className={`flow-node custom-flow-node ${isScenario ? 'scenario-node' : ''} ${runStatusClass} ${accentClass}`}>
+    <div className={`flow-node custom-flow-node ${isScenario ? 'scenario-node' : ''} ${isAnnotation ? 'annotation-node' : ''} ${runStatusClass} ${accentClass}`}>
       <Handle
         type="target"
         position={Position.Left}
@@ -256,17 +274,29 @@ export function SpecCustomNode({ data, isConnectable }) {
       />
 
       <div className="node-content">
-        <div className="node-header">
-          <span className={`node-type type-${data.type}`}>{data.type}</span>
-          {data.runStatus === 'running' && <span className="node-run-dot running" />}
-          {data.runStatus === 'passed'  && <span className="node-run-dot passed" />}
-          {data.runStatus === 'failed'  && <span className="node-run-dot failed" />}
-        </div>
+        {!isAnnotation && (
+          <div className="node-header">
+            <span className={`node-type type-${data.type}`}>{data.type}</span>
+            {data.runStatus === 'running' && <span className="node-run-dot running" />}
+            {data.runStatus === 'passed'  && <span className="node-run-dot passed" />}
+            {data.runStatus === 'failed'  && <span className="node-run-dot failed" />}
+          </div>
+        )}
 
         <div className="node-body">
-          <div className="node-title">{data.title}</div>
-          {data.subtitle && <div className="node-subtitle">{data.subtitle}</div>}
-          <NodeExtra type={data.type} raw={data._rawData} />
+          {isAnnotation ? (
+            // Free-text annotation line — render as an inline comment label
+            <div className="annotation-body">
+              <span className="annotation-sigil">//</span>
+              <span className="annotation-text">{data.title}</span>
+            </div>
+          ) : (
+            <>
+              <div className="node-title">{data.title}</div>
+              {data.subtitle && <div className="node-subtitle">{data.subtitle}</div>}
+              <NodeExtra type={data.type} raw={data._rawData} />
+            </>
+          )}
         </div>
       </div>
 

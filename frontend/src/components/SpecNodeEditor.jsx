@@ -68,18 +68,118 @@ const nodeTypes = {
   custom: SpecCustomNode,
 };
 
-export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
-  const initialFlow = useMemo(() => specToFlow(spec.parsed), [spec.parsed]);
+// ── Scenario-slice helpers ────────────────────────────────────────────────────
+// Build an ordered list of `## heading` line numbers (1-indexed) — duplicated
+// here to avoid circular imports with SpecView.jsx.
+function _extractScenarioLineList(content) {
+  if (!content) return [];
+  const out = [];
+  content.split('\n').forEach((line, i) => {
+    if (/^##\s+/.test(line)) out.push(i + 1);
+  });
+  return out;
+}
+
+// Return the raw source text of scenario[scenarioIndex] (from its `##` heading
+// to just before the next `##`, trailing blank lines stripped) plus the 0-based
+// [startIdx, endIdx) range inside the split-lines array.
+function _scenarioSourceSlice(content, scenarioIndex) {
+  const lineList = _extractScenarioLineList(content);
+  const lines = (content || '').split('\n');
+  const startIdx = (lineList[scenarioIndex] ?? 1) - 1; // 0-based
+  const nextStart = lineList[scenarioIndex + 1];
+  const rawEnd = nextStart != null ? nextStart - 1 : lines.length;
+  // Trim trailing blank lines so the textarea doesn't have a ragged bottom
+  let sliceEnd = rawEnd;
+  while (sliceEnd > startIdx && !lines[sliceEnd - 1]?.trim()) sliceEnd--;
+  return {
+    text: lines.slice(startIdx, sliceEnd).join('\n'),
+    startIdx,
+    endIdx: rawEnd, // where to resume copying from when splicing
+  };
+}
+
+// Splice newScenarioText back into fullContent, replacing [startIdx, endIdx).
+function _spliceScenarioIntoContent(fullContent, startIdx, endIdx, newScenarioText) {
+  const lines = fullContent.split('\n');
+  const newLines = newScenarioText.split('\n');
+  // Keep one blank separator line between scenarios when there is a next one
+  const needsSeparator = endIdx < lines.length;
+  return [
+    ...lines.slice(0, startIdx),
+    ...newLines,
+    ...(needsSeparator ? [''] : []),
+    ...lines.slice(endIdx),
+  ].join('\n');
+}
+
+// Build the full steps_json payload after a single-scenario visual edit, by
+// merging the edited scenario back into the original parsed spec structure.
+function _buildScenarioStepsJson(nodes, scenarioName, scenarioTags, spec, scenarioIndex) {
+  const sortedNodes = [...nodes].sort((a, b) => {
+    if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
+    return a.position.y - b.position.y;
+  });
+
+  const stepNodes = sortedNodes.filter((n) => n.data.type !== 'scenario');
+  const editedScenario = {
+    name: scenarioName,
+    tags: _splitTags(scenarioTags),
+    steps: stepNodes.map((n) => ({ type: n.data.type, raw: '', data: clone(n.data._rawData) })),
+  };
+
+  const scenarios = (spec.parsed.scenarios || []).map((sc, i) =>
+    i === scenarioIndex ? editedScenario : sc,
+  );
+
+  return {
+    title: spec.parsed.title || 'New Spec',
+    file_tags: spec.parsed.file_tags || [],
+    setup_steps: spec.parsed.setup_steps || [],
+    scenarios,
+  };
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved }) {
+  // ── Editor scope: full spec (scenarioIndex == null) or single scenario ──
+  const isSingleScenario = scenarioIndex != null;
+  const targetScenario = isSingleScenario ? (spec.parsed.scenarios || [])[scenarioIndex] : null;
+
+  // For visual mode: build a mini-parsed-spec that only contains the target
+  // scenario (no setup steps, no other scenarios) when in single-scenario mode.
+  const parsedForEditor = useMemo(() => {
+    if (!isSingleScenario) return spec.parsed;
+    return {
+      ...spec.parsed,
+      setup_steps: [],
+      scenarios: targetScenario ? [targetScenario] : [],
+    };
+  }, [spec.parsed, isSingleScenario, targetScenario]);
+
+  const initialFlow = useMemo(() => specToFlow(parsedForEditor), [parsedForEditor]);
 
   const [nodes, setNodes] = useNodesState(initialFlow.nodes);
   const [edges, setEdges] = useEdgesState(initialFlow.edges);
 
   const [editMode, setEditMode] = useState('visual'); // 'visual' | 'source'
-  const [sourceContent, setSourceContent] = useState(spec.content || '');
 
+  // Source content — full file for full-spec mode; scenario slice for single-scenario mode.
+  const [sourceContent, setSourceContent] = useState(() => {
+    if (!isSingleScenario) return spec.content || '';
+    return _scenarioSourceSlice(spec.content, scenarioIndex).text;
+  });
+
+  // File-level fields (full-spec mode only)
   const [title, setTitle] = useState(spec.parsed.title || 'New Spec');
   const [fileTags, setFileTags] = useState((spec.parsed.file_tags || []).join(', '));
   const [path, setPath] = useState(spec.path);
+
+  // Scenario-level fields (single-scenario mode only)
+  const [scenarioName, setScenarioName] = useState(targetScenario?.name || 'Scenario');
+  const [scenarioTags, setScenarioTags] = useState((targetScenario?.tags || []).join(', '));
+
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [visualDirty, setVisualDirty] = useState(false);
@@ -275,25 +375,45 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
     setSaving(true);
     setToast(null);
     try {
-      if (editMode === 'source' && path === spec.path && sourceContent === (spec.content || '')) {
-        setToast({ type: 'success', message: 'No changes to save.' });
-        await onSaved();
-        return;
-      }
-      if (editMode === 'visual' && path === spec.path && !visualDirty) {
-        setToast({ type: 'success', message: 'No changes to save.' });
-        await onSaved();
-        return;
+      if (isSingleScenario) {
+        // ── Single-scenario save ────────────────────────────────────────────
+        // Source mode: splice the edited scenario lines back into the full file.
+        // Visual mode: rebuild scenario from nodes and merge into full parsed spec.
+        if (editMode === 'source') {
+          const { startIdx, endIdx } = _scenarioSourceSlice(spec.content, scenarioIndex);
+          const newContent = _spliceScenarioIntoContent(
+            spec.content, startIdx, endIdx, sourceContent,
+          );
+          await api.saveSpec({ path: spec.path, raw_content: newContent });
+        } else {
+          const stepsJson = _buildScenarioStepsJson(
+            nodes, scenarioName, scenarioTags, spec, scenarioIndex,
+          );
+          await api.saveSpec({ path: spec.path, steps_json: stepsJson });
+        }
+      } else {
+        // ── Full-spec save (original behaviour) ────────────────────────────
+        if (editMode === 'source' && path === spec.path && sourceContent === (spec.content || '')) {
+          setToast({ type: 'success', message: 'No changes to save.' });
+          await onSaved();
+          return;
+        }
+        if (editMode === 'visual' && path === spec.path && !visualDirty) {
+          setToast({ type: 'success', message: 'No changes to save.' });
+          await onSaved();
+          return;
+        }
+
+        if (editMode === 'source') {
+          await api.saveSpec({ path, raw_content: sourceContent });
+        } else if (!visualDirty) {
+          await api.saveSpec({ path, raw_content: spec.content || '' });
+        } else {
+          await api.saveSpec({ path, steps_json: flowToSpec(nodes, title, fileTags) });
+        }
       }
 
-      if (editMode === 'source') {
-        await api.saveSpec({ path, raw_content: sourceContent });
-      } else if (!visualDirty) {
-        await api.saveSpec({ path, raw_content: spec.content || '' });
-      } else {
-        await api.saveSpec({ path, steps_json: flowToSpec(nodes, title, fileTags) });
-      }
-      setToast({ type: 'success', message: 'Spec saved.' });
+      setToast({ type: 'success', message: 'Saved.' });
       await onSaved();
     } catch (err) {
       setToast({ type: 'error', message: err.message || 'Save failed.' });
@@ -307,31 +427,53 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
   return (
     <div className="node-editor react-flow-editor">
       <div className="node-editor-top">
-        <label>
-          Title
-          <input
-            value={title}
-            onChange={(e) => {
-              setTitle(e.target.value);
-              setVisualDirty(true);
-            }}
-          />
-        </label>
-        <label>
-          Tags
-          <input
-            value={fileTags}
-            onChange={(e) => {
-              setFileTags(e.target.value);
-              setVisualDirty(true);
-            }}
-            placeholder="tag1, tag2"
-          />
-        </label>
-        <label className="wide-field">
-          File path
-          <input value={path} onChange={(e) => setPath(e.target.value)} />
-        </label>
+        {isSingleScenario ? (
+          // ── Single-scenario header ────────────────────────────────────────
+          <>
+            <label>
+              Scenario
+              <input
+                value={scenarioName}
+                onChange={(e) => { setScenarioName(e.target.value); setVisualDirty(true); }}
+              />
+            </label>
+            <label>
+              Tags
+              <input
+                value={scenarioTags}
+                onChange={(e) => { setScenarioTags(e.target.value); setVisualDirty(true); }}
+                placeholder="tag1, tag2"
+              />
+            </label>
+            <label className="wide-field">
+              File path
+              <input value={spec.path} readOnly className="readonly-field" />
+            </label>
+          </>
+        ) : (
+          // ── Full-spec header ──────────────────────────────────────────────
+          <>
+            <label>
+              Title
+              <input
+                value={title}
+                onChange={(e) => { setTitle(e.target.value); setVisualDirty(true); }}
+              />
+            </label>
+            <label>
+              Tags
+              <input
+                value={fileTags}
+                onChange={(e) => { setFileTags(e.target.value); setVisualDirty(true); }}
+                placeholder="tag1, tag2"
+              />
+            </label>
+            <label className="wide-field">
+              File path
+              <input value={path} onChange={(e) => setPath(e.target.value)} />
+            </label>
+          </>
+        )}
         <div className="editor-mode-toggle">
           <button className={`filter${editMode === 'visual' ? ' active' : ''}`} onClick={() => setEditMode('visual')}>Visual</button>
           <button className={`filter${editMode === 'source' ? ' active' : ''}`} onClick={() => setEditMode('source')}>Source</button>
@@ -345,6 +487,11 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
 
       {editMode === 'source' ? (
         <div className="source-editor-wrap">
+          {isSingleScenario && (
+            <div className="source-editor-notice muted">
+              Editing scenario only — other scenarios are unchanged.
+            </div>
+          )}
           <textarea
             className="source-editor"
             value={sourceContent}
@@ -426,6 +573,8 @@ export function SpecNodeEditor({ spec, summary, onCancel, onSaved }) {
   );
 }
 
+// ── flowToSpec: full-spec visual → steps_json ─────────────────────────────────
+
 function flowToSpec(nodes, title, fileTags) {
   const setup_steps = [];
   const scenarios = [];
@@ -443,7 +592,7 @@ function flowToSpec(nodes, title, fileTags) {
     if (type === 'scenario') {
       currentScenario = {
         name: rawData.name || 'Scenario',
-        tags: splitTags(rawData.tags),
+        tags: _splitTags(rawData.tags),
         steps: [],
       };
       scenarios.push(currentScenario);
@@ -453,10 +602,10 @@ function flowToSpec(nodes, title, fileTags) {
     if (currentScenario) currentScenario.steps.push(step);
     else setup_steps.push(step);
   }
-  return { title, file_tags: splitTags(fileTags), setup_steps, scenarios };
+  return { title, file_tags: _splitTags(fileTags), setup_steps, scenarios };
 }
 
-function splitTags(value) {
+function _splitTags(value) {
   return String(value || '').split(',').map((t) => t.trim()).filter(Boolean);
 }
 

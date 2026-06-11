@@ -846,6 +846,71 @@ button.danger {
   gap: 0;
 }
 
+/* ── Run error banner (shown at top of detail panel when node failed) ── */
+.nd-run-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+.nd-run-error-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #f87171;
+  margin-bottom: 6px;
+}
+.nd-run-error-message {
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  color: #fca5a5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+}
+.nd-run-error-desc {
+  font-size: 11px;
+  color: #fca5a5;
+  margin-bottom: 8px;
+  line-height: 1.45;
+  opacity: 0.85;
+}
+.nd-balance-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.nd-balance-diff-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #f87171;
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+  padding: 3px 6px 4px;
+}
+.nd-balance-diff-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
+}
+.nd-balance-diff-table tr:last-child td { border-bottom: none; }
+.nd-bd-num { text-align: right; }
+.nd-bd-addr { color: #e2e8f0; font-weight: 600; }
+.nd-bd-denom { color: #94a3b8; }
+.nd-bd-phase { color: #64748b; font-size: 10px; }
+.nd-bd-expected { color: #86efac; }
+.nd-bd-actual { color: #f87171; }
+.nd-bd-delta { font-weight: 700; }
+.nd-bd-neg { color: #fb923c; }
+.nd-bd-pos { color: #4ade80; }
+
 /* ── Generic detail row / section ── */
 .nd-section {
   display: flex;
@@ -1157,16 +1222,21 @@ button.danger {
 /* ── Instruction batch item ── */
 .nd-instr-item {
   display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 4px 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 0;
   border-bottom: 1px solid #0f1e31;
 }
 .nd-instr-item:last-child { border-bottom: none; }
+.nd-instr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .nd-instr-type {
   font-size: 11px;
   font-family: ui-monospace, Consolas, monospace;
-  color: #64748b;
+  color: #94a3b8;
   flex: 1;
 }
 .nd-instr-amount {
@@ -1174,6 +1244,33 @@ button.danger {
   font-family: ui-monospace, Consolas, monospace;
   color: #e2e8f0;
   font-weight: 600;
+}
+.nd-instr-accounts {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #475569;
+}
+.nd-instr-acct {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10px;
+  color: #64748b;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nd-instr-arrow { color: #334155; font-size: 11px; }
+.nd-instr-txn {
+  font-size: 10px;
+  color: #475569;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.nd-instr-attr {
+  font-size: 10px;
+  color: #475569;
+  font-style: italic;
 }
 
 .detail-row-item {
@@ -1315,11 +1412,25 @@ button.danger {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   margin-top: 4px;
+}
+
+.source-editor-notice {
+  font-size: 11px;
+  padding: 4px 6px 6px;
+}
+
+/* Read-only path field in scenario-edit mode */
+.readonly-field {
+  opacity: 0.45;
+  cursor: default;
+  user-select: none;
 }
 
 .source-editor {
   flex: 1;
+  min-height: 0;
   background: #060f1d;
   color: #e2e8f0;
   border: 1px solid #1e293b;
@@ -1632,6 +1743,39 @@ button.danger {
 .accent-schedule    { border-left-color: #a78bfa; border-color: #2a2050; }
 .accent-notification{ border-left-color: #c084fc; border-color: #2e1e50; }
 .accent-flag        { border-left-color: #fb923c; border-color: #3a2010; }
+.accent-other       { border-left-color: #334155; border-color: #1c2a3a; background: #0b1624; }
+
+/* Annotation node — compact, muted, no heavy card shadow */
+.annotation-node {
+  width: auto;
+  min-width: 140px;
+  max-width: 360px;
+  opacity: 0.72;
+  box-shadow: none;
+  border-radius: 6px;
+}
+.annotation-node:hover { opacity: 0.95; box-shadow: none; }
+.annotation-node .node-content { padding: 7px 12px 7px 13px; }
+.annotation-body {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.annotation-sigil {
+  font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+  font-size: 12px;
+  color: #475569;
+  flex-shrink: 0;
+  line-height: 1;
+  letter-spacing: -0.5px;
+}
+.annotation-text {
+  font-size: 12px;
+  font-style: italic;
+  color: #64748b;
+  line-height: 1.4;
+  word-break: break-word;
+}
 
 .scenario-node {
   border-style: solid;

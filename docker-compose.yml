@@ -11,33 +11,52 @@
 #   This compose file instead builds a long-lived, dedicated container from
 #   the *same* Dockerfile as the devcontainer, mounts `smart-contracts` and
 #   the viewer backend into it, and runs the FastAPI backend directly inside.
-#   `gauge run` then becomes a plain local subprocess (see app/api/routes/run.py
-#   — the existing Linux branch already handles this with no docker exec).
+#   `gauge run` then becomes a plain local subprocess.
 #
-# Setup before first run:
-#   cp runner/.env.example runner/.env   # then fill in GITHUB_TOKEN etc.
-#   See runner/.env.example for why a token is needed (private `contracts-api`
-#   git dependency that `uv sync` must clone).
+# ── First-time build ──────────────────────────────────────────────────────────
+#   cp runner/.env.example runner/.env   # fill in GITHUB_TOKEN
 #
-# Usage:
-#   cd debugTool/simulation-viewer
-#   docker compose up -d --build      # first run (builds + runs full setup —
-#                                     # can take 10-20 min the very first time)
-#   docker compose logs -f            # tail backend / setup logs
-#   docker compose down               # stop
+#   # Option A — token in shell env (recommended):
+#   export GITHUB_TOKEN=ghp_xxxx
+#   docker compose build viewer-runner
 #
-# This brings up BOTH the backend (gauge runner, port 8001) and the frontend
-# (Vite dev server, port 5173) — open http://localhost:5173.
+#   # Option B — token passed inline:
+#   GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner
+#
+#   docker compose up -d
+#
+#   The build downloads and pre-installs all Python deps (71 packages), bun
+#   packages and the Gauge Python plugin into the image. After that,
+#   `docker compose up` starts in ~3 seconds — no downloads at container start.
+#
+# ── Rebuilding after dependency changes ──────────────────────────────────────
+#   If pyproject.toml / uv.lock / requirements.txt change:
+#     GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner
+#     docker compose up -d --force-recreate viewer-runner
+#
+# ── Daily usage (no dependency changes) ──────────────────────────────────────
+#   docker compose up -d            # starts in ~3 sec
+#   docker compose logs -f          # tail logs
+#   docker compose down             # stop
+#
+# Open http://localhost:5173 after starting.
 
 services:
   viewer-runner:
     build:
-      context: ../smart-contracts/.devcontainer
-      dockerfile: Dockerfile
+      # Build context is source/ — the parent of simulation-viewer/ — so both
+      # smart-contracts/ and simulation-viewer/ are accessible in the Dockerfile.
+      context: ..
+      dockerfile: simulation-viewer/runner/Dockerfile
       args:
         UV_VERSION: "0.8.9"
         BUN_VERSION: "1.2.1"
-        PYTHON_VERSION: "3.10"
+      secrets:
+        # GITHUB_TOKEN is passed as a BuildKit secret: never stored in any
+        # image layer or visible in `docker history`. Set it in your shell
+        # before running `docker compose build`:
+        #   export GITHUB_TOKEN=ghp_xxxx
+        - github_token
     container_name: sim-viewer-runner
     user: vscode
     working_dir: /workspaces/smart-contracts
@@ -49,34 +68,21 @@ services:
       DEVELOPMENT_MODE: "1"
       DOCKER_ENVIRONMENT: "1"
       SMART_CONTRACTS_DIR: /workspaces/smart-contracts
-      # ── Isolated venv outside smart-contracts ──────────────────────────────
-      # The runner's Python virtualenv lives at /opt/sc-venv (bind-mounted
-      # from ./runner/.venv-sc below) — completely outside the shared
-      # smart-contracts checkout so it NEVER touches the devcontainer's .venv.
-      #
-      # UV_PROJECT_ENVIRONMENT: tells `uv sync` / `uv venv` to create and use
-      #   the venv at this path instead of the default smart-contracts/.venv.
-      # GAUGE_PYTHON_COMMAND: overrides the hardcoded path in
-      #   config/gauge/default/python.properties so gauge uses the same venv.
+      # Venv paths are baked into the image (set as ENV in the Dockerfile).
+      # Repeating them here ensures subprocesses launched via `docker exec`
+      # also see the correct values.
       UV_PROJECT_ENVIRONMENT: /opt/sc-venv
       GAUGE_PYTHON_COMMAND: /opt/sc-venv/bin/python
     volumes:
-      # Mount smart-contracts read-write so gauge can run + write simulation
-      # output, and the viewer can read/save spec files.
+      # smart-contracts source tree (bind-mount, writable so gauge can run)
       - ../smart-contracts:/workspaces/smart-contracts
-      # Runner's private virtualenv — mounted at /opt/sc-venv, a path that
-      # has NO overlap with the smart-contracts tree. Combined with the env
-      # vars above this means script/setup and gauge both use /opt/sc-venv
-      # and smart-contracts/.venv is left completely untouched.
-      - ./runner/.venv-sc:/opt/sc-venv
-      # Mount only the backend (not the whole viewer repo) into the runner.
+      # viewer backend source (bind-mount for live reload)
       - ./backend:/opt/viewer-backend
+      # runner scripts / .env
       - ./runner:/opt/viewer-runner
-      # NOTE: uv's downloaded-Python cache (~/.local/share/uv) intentionally
-      # is NOT persisted — Docker creates named volumes root-owned, and this
-      # container runs as the unprivileged `vscode` user. When the cache is
-      # gone the venv's interpreter symlink dangles; the entrypoint detects
-      # this and re-runs setup automatically (~2 min, self-healing).
+      # NOTE: /opt/sc-venv and /opt/viewer-backend-venv are directories baked
+      # into the image — no volume mounts needed. smart-contracts/.venv is
+      # never touched by this container.
     ports:
       - "8001:8000"
     entrypoint: ["/opt/viewer-runner/entrypoint.sh"]
@@ -88,16 +94,16 @@ services:
       dockerfile: Dockerfile.dev
     container_name: sim-viewer-frontend
     environment:
-      # vite.config.js proxies /api/* to this target — same-origin from the
-      # browser's perspective, so no CORS / VITE_API_BASE juggling needed.
       VITE_API_PROXY_TARGET: http://viewer-runner:8000
     volumes:
       - ./frontend:/app
-      # Anonymous volume: keep the container's own node_modules (Linux
-      # binaries) instead of the host's (macOS) — avoids native-module clashes.
       - /app/node_modules
     ports:
       - "5173:5173"
     depends_on:
       - viewer-runner
     restart: unless-stopped
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN

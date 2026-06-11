@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { api } from './api/client.js';
 import { Accounts } from './components/Accounts.jsx';
@@ -25,6 +25,9 @@ export function App() {
   const [routeVersion, setRouteVersion] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  // Run state cache: Map<specPath, runState> — persists across tab switches and
+  // spec navigations so the user can leave and return to a run without losing it.
+  const runStateCacheRef = useRef(new Map());
 
   useEffect(() => {
     api
@@ -205,6 +208,7 @@ export function App() {
               summary={summary}
               onReload={reloadSpec}
               onSpecSaved={reloadSpec}
+              runStateCache={runStateCacheRef}
             />
           )}
           {hasSimData && activeTab === 'timeline' && <Timeline events={summary.events} spec={spec?.parsed} />}
