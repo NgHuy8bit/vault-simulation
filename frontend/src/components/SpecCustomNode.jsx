@@ -263,6 +263,13 @@ export function SpecCustomNode({ data, isConnectable }) {
   const isAnnotation = data.type === 'other';
   const runStatusClass = data.runStatus ? `run-status-${data.runStatus}` : '';
   const accentClass = TYPE_ACCENT[data.type] || 'accent-config';
+  const statusLabel = data.runStatus === 'running'
+    ? 'Running'
+    : data.runStatus === 'passed'
+      ? 'Passed'
+      : data.runStatus === 'failed'
+        ? 'Failed'
+        : null;
 
   return (
     <div className={`flow-node custom-flow-node ${isScenario ? 'scenario-node' : ''} ${isAnnotation ? 'annotation-node' : ''} ${runStatusClass} ${accentClass}`}>
@@ -277,9 +284,12 @@ export function SpecCustomNode({ data, isConnectable }) {
         {!isAnnotation && (
           <div className="node-header">
             <span className={`node-type type-${data.type}`}>{data.type}</span>
-            {data.runStatus === 'running' && <span className="node-run-dot running" />}
-            {data.runStatus === 'passed'  && <span className="node-run-dot passed" />}
-            {data.runStatus === 'failed'  && <span className="node-run-dot failed" />}
+            {statusLabel && (
+              <span className={`node-status-pill ${data.runStatus}`}>
+                <span className={`node-run-dot ${data.runStatus}`} />
+                {statusLabel}
+              </span>
+            )}
           </div>
         )}
 

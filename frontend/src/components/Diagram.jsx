@@ -3,12 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { addressColor, eventColor } from '../utils/colors.js';
 import { amount, tsShort } from '../utils/format.js';
 
-const W = 1000;
-const H = 340;
-const ML = 90;
-const MR = 20;
-const MT = 20;
-const MB = 24;
+const W = 1320;
+const H = 500;
+const ML = 50;
+const MR = 14;
+const MT = 28;
+const MB = 38;
 
 export function Diagram({ summary }) {
   const [account, setAccount] = useState(summary.accounts[0] || '');
@@ -120,7 +120,7 @@ export function Diagram({ summary }) {
 
   return (
     <div className="diagram-tab">
-      <div className="toolbar">
+      <div className="toolbar diagram-toolbar">
         <label>
           Account
           <select value={account} onChange={(event) => setAccount(event.target.value)}>
@@ -146,11 +146,11 @@ export function Diagram({ summary }) {
             Reset zoom
           </button>
         )}
-        <span className="muted" style={{ marginLeft: 'auto', fontSize: '11px' }}>
-          {enabled.size}/{addresses.length} addresses · scroll →
+        <span className="diagram-count-hint">
+          {enabled.size}/{addresses.length} addresses · wheel to zoom
         </span>
       </div>
-      <div className="address-bar">
+      <div className="address-bar diagram-address-bar">
         {addresses.map((address) => (
           <button
             key={address}
@@ -164,17 +164,31 @@ export function Diagram({ summary }) {
       </div>
       {series.length ? (
         <div className="chart-card">
+          <div className="chart-card-header">
+            <div>
+              <div className="section-title">Balance trend</div>
+              <div className="chart-title">{account} · {denomination}</div>
+            </div>
+            <div className="chart-meta">
+              <span>{series.length} visible series</span>
+              <span>{markers.length} events</span>
+            </div>
+          </div>
           <div className="chart-group" onWheel={onWheel}>
             <BalanceChart series={series} markers={markers} tMin={tMin} tMax={tMax} denomination={denomination} />
             <EventStrip markers={markers} tMin={tMin} tMax={tMax} />
           </div>
           <div className="chart-legend">
-            {series.map((item) => (
-              <span key={item.label} className="legend-item">
-                <span className="legend-swatch" style={{ background: item.color }} />
-                <span style={{ color: item.color }}>{item.label}</span>
-              </span>
-            ))}
+            {series.map((item) => {
+              const latest = item.points[item.points.length - 1];
+              return (
+                <span key={item.label} className="legend-item">
+                  <span className="legend-swatch" style={{ background: item.color }} />
+                  <span className="legend-label" style={{ color: item.color }}>{item.label}</span>
+                  {latest && <span className="legend-value">{amount(latest.raw)} {denomination}</span>}
+                </span>
+              );
+            })}
           </div>
         </div>
       ) : (
@@ -198,6 +212,7 @@ function BalanceChart({ series, markers, tMin, tMax, denomination }) {
   const tRange = tMax - tMin || 1;
   const xOf = (ms) => ML + ((ms - tMin) / tRange) * pw;
   const yOf = (value) => MT + ph - ((value - yMin) / yRange) * ph;
+  const visibleMarkers = markers.filter((marker) => marker.ms >= tMin && marker.ms <= tMax);
 
   function getStepValueAt(points, ms) {
     let result = null;
@@ -212,68 +227,97 @@ function BalanceChart({ series, markers, tMin, tMax, denomination }) {
     const rect = svgRef.current.getBoundingClientRect();
     const svgX = Math.max(ML, Math.min(W - MR, ((e.clientX - rect.left) / rect.width) * W));
     const ms = tMin + ((svgX - ML) / pw) * tRange;
-    setHover({ svgX, ms, clientX: e.clientX, clientY: e.clientY });
+    const tooltipWidth = 320;
+    const tooltipHeight = 180;
+    const viewportWidth = window.innerWidth || tooltipWidth + 24;
+    const viewportHeight = window.innerHeight || tooltipHeight + 24;
+    const preferLeft = e.clientX > viewportWidth - tooltipWidth - 36;
+    const rawLeft = preferLeft ? e.clientX - tooltipWidth - 14 : e.clientX + 14;
+    const left = Math.max(12, Math.min(rawLeft, viewportWidth - tooltipWidth - 12));
+    const top = Math.max(72, Math.min(e.clientY - 18, viewportHeight - tooltipHeight - 12));
+    setHover({ svgX, ms, left, top });
   }
 
   const hoverRows = hover
     ? series.map((item) => ({ label: item.label, color: item.color, point: getStepValueAt(item.points, hover.ms) })).filter((r) => r.point)
     : [];
+  const gridTicks = Array.from({ length: 5 }, (_, index) => index);
 
   return (
-    <div style={{ position: 'relative' }}>
-      <svg ref={svgRef} className="chart-svg" viewBox={`0 0 ${W} ${H}`} onMouseMove={onMouseMove} onMouseLeave={() => setHover(null)}>
-        <rect width={W} height={H} fill="#0a0f1a" />
-        {[0, 1, 2, 3, 4, 5].map((index) => {
-          const value = yMin + (yRange * index) / 5;
+    <div className="balance-chart-wrap">
+      <svg
+        ref={svgRef}
+        className="chart-svg"
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        onMouseMove={onMouseMove}
+        onMouseLeave={() => setHover(null)}
+      >
+        <defs>
+          <clipPath id="balanceChartClip">
+            <rect x={ML} y={MT} width={pw} height={ph} />
+          </clipPath>
+          <linearGradient id="chartSurface" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#091422" />
+            <stop offset="100%" stopColor="#040a13" />
+          </linearGradient>
+        </defs>
+        <rect width={W} height={H} fill="url(#chartSurface)" />
+        {gridTicks.map((index) => {
+          const value = yMin + (yRange * index) / (gridTicks.length - 1);
           const y = yOf(value);
           return (
             <g key={index}>
-              <line x1={ML} y1={y} x2={W - MR} y2={y} stroke="#1e293b" strokeDasharray="4 6" />
-              <text x={ML - 8} y={y + 4} textAnchor="end" fill="#64748b" fontSize="10">
+              <line x1={ML} y1={y} x2={W - MR} y2={y} className="chart-grid-line" />
+              <text x={ML - 8} y={y + 4} textAnchor="end" className="chart-axis-label">
                 {amount(Math.round(value))}
               </text>
             </g>
           );
         })}
-        <line x1={ML} y1={MT} x2={ML} y2={MT + ph} stroke="#334155" />
-        <line x1={ML} y1={MT + ph} x2={W - MR} y2={MT + ph} stroke="#334155" />
-        <g clipPath="url(#chartClip)">
-          <defs>
-            <clipPath id="chartClip">
-              <rect x={ML} y={MT} width={pw} height={ph} />
-            </clipPath>
-          </defs>
-          {markers.map((marker) => {
+        <line x1={ML} y1={MT} x2={ML} y2={MT + ph} className="chart-axis-line" />
+        <line x1={ML} y1={MT + ph} x2={W - MR} y2={MT + ph} className="chart-axis-line" />
+        <g clipPath="url(#balanceChartClip)">
+          {visibleMarkers.map((marker) => {
             const x = xOf(marker.ms);
-            if (x < ML || x > W - MR) return null;
-            return <line key={marker.id} x1={x} y1={MT} x2={x} y2={MT + ph} stroke={eventColor(marker.type)} opacity="0.18" />;
+            return (
+              <line
+                key={`${marker.id}-${marker.ms}`}
+                x1={x}
+                y1={MT + ph - 14}
+                x2={x}
+                y2={MT + ph}
+                stroke={eventColor(marker.type)}
+                className="chart-event-tick"
+              />
+            );
           })}
           {series.map((item) => (
-            <path key={item.label} d={stepPath(item.points, xOf, yOf, tMax)} fill="none" stroke={item.color} strokeWidth="2" />
+            <path key={item.label} d={stepPath(item.points, xOf, yOf, tMax)} fill="none" stroke={item.color} className="chart-series-line" />
           ))}
           {series.flatMap((item) =>
             item.points.map((point) => {
               const x = xOf(point.ms);
               if (x < ML || x > W - MR) return null;
               return (
-                <circle key={`${item.label}-${point.timestamp}`} cx={x} cy={yOf(point.amount)} r="3" fill={item.color} />
+                <circle key={`${item.label}-${point.timestamp}`} cx={x} cy={yOf(point.amount)} r="3.2" fill={item.color} className="chart-point" />
               );
             }),
           )}
           {hover && (
-            <line x1={hover.svgX} y1={MT} x2={hover.svgX} y2={MT + ph} stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" pointerEvents="none" />
+            <line x1={hover.svgX} y1={MT} x2={hover.svgX} y2={MT + ph} className="chart-hover-line" pointerEvents="none" />
           )}
           {hover &&
             hoverRows.map((row) => {
               const y = yOf(row.point.amount);
-              return <circle key={row.label} cx={hover.svgX} cy={y} r="4" fill={row.color} stroke="#0a0f1a" strokeWidth="1.5" pointerEvents="none" />;
+              return <circle key={row.label} cx={hover.svgX} cy={y} r="5" fill={row.color} className="chart-hover-point" pointerEvents="none" />;
             })}
         </g>
       </svg>
       {hover && hoverRows.length > 0 && (
         <div
           className="chart-tooltip"
-          style={{ position: 'fixed', left: hover.clientX + 14, top: hover.clientY - 12, pointerEvents: 'none' }}
+          style={{ position: 'fixed', left: hover.left, top: hover.top, pointerEvents: 'none' }}
         >
           <div className="chart-tooltip-time">{new Date(hover.ms).toISOString().replace('T', ' ').slice(0, 19)} UTC</div>
           {hoverRows.map((row) => (
@@ -290,7 +334,7 @@ function BalanceChart({ series, markers, tMin, tMax, denomination }) {
 }
 
 function EventStrip({ markers, tMin, tMax }) {
-  const height = 80;
+  const height = 72;
   const tRange = tMax - tMin || 1;
   // x-coordinates match BalanceChart exactly (same ML, MR, W)
   const xOf = (ms) => ML + ((ms - tMin) / tRange) * (W - ML - MR);
@@ -306,17 +350,17 @@ function EventStrip({ markers, tMin, tMax }) {
   }
 
   return (
-    <svg className="event-strip-svg" viewBox={`0 0 ${W} ${height}`}>
-      <rect width={W} height={height} fill="#0a0f1a" />
+    <svg className="event-strip-svg" viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none">
+      <rect width={W} height={height} fill="#050b15" />
       {/* Baseline */}
-      <line x1={ML} y1={36} x2={W - MR} y2={36} stroke="#1e293b" />
+      <line x1={ML} y1={32} x2={W - MR} y2={32} className="event-strip-baseline" />
       {/* Event tick marks */}
       {markers.map((marker) => {
         const x = xOf(marker.ms);
         if (x < ML - 2 || x > W - MR + 2) return null;
         return (
-          <g key={marker.id}>
-            <line x1={x} y1={8} x2={x} y2={32} stroke={eventColor(marker.type)} strokeWidth="2" strokeLinecap="round" />
+          <g key={`${marker.id ?? marker.summary}-${marker.ms}-${marker.type}`}>
+            <line x1={x} y1={8} x2={x} y2={27} stroke={eventColor(marker.type)} className="event-strip-tick" />
             <title>{`${tsShort(marker.timestamp)} · ${marker.type}\n${marker.summary}`}</title>
           </g>
         );
@@ -324,13 +368,12 @@ function EventStrip({ markers, tMin, tMax }) {
       {/* Time axis tick marks */}
       {ticks.map(({ ms, x, i }) => (
         <g key={ms}>
-          <line x1={x} y1={36} x2={x} y2={42} stroke="#334155" />
+          <line x1={x} y1={32} x2={x} y2={38} className="event-axis-tick" />
           <text
             x={x}
-            y={53}
+            y={50}
             textAnchor={i === 0 ? 'start' : i === N_TICKS - 1 ? 'end' : 'middle'}
-            fill="#475569"
-            fontSize="9"
+            className="event-axis-label"
           >
             {fmtTick(ms)}
           </text>
@@ -338,9 +381,9 @@ function EventStrip({ markers, tMin, tMax }) {
       ))}
       {/* Color key row — positioned below tick labels */}
       {['accepted', 'rejected', 'notification', 'accrual'].map((kind, index) => (
-        <g key={kind} transform={`translate(${ML + index * 90}, 67)`}>
+        <g key={kind} transform={`translate(${ML + index * 94}, 63)`}>
           <rect width={8} height={4} rx={1} fill={eventColor(kind)} />
-          <text x={12} y={4} fill="#475569" fontSize="8">
+          <text x={12} y={4} className="event-key-label">
             {kind}
           </text>
         </g>

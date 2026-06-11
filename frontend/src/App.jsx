@@ -162,7 +162,7 @@ export function App() {
             >
               {sidebarHidden ? '▶' : '◀'}
             </button>
-            <div>
+            <div className="topbar-title-block">
               <div className="eyebrow">Vault Simulation Viewer</div>
               <div className="title">{title}</div>
             </div>
@@ -191,7 +191,7 @@ export function App() {
                 className={`tab ${activeTab === tab ? 'active' : ''}`}
                 onClick={() => handleTabChange(tab)}
               >
-                {tab}
+                <span>{tab}</span>
               </button>
             ))}
           </nav>

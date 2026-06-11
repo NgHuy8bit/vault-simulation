@@ -2,8 +2,13 @@ export function Sidebar({ tree, loading, selectedPath, onSelect }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <div className="eyebrow green">Simulation Viewer</div>
-        <div className="muted">Vault test specs</div>
+        <div className="sidebar-brand">
+          <span className="sidebar-brand-mark">VS</span>
+          <div>
+            <div className="eyebrow green">Simulation Viewer</div>
+            <div className="muted">Vault test specs</div>
+          </div>
+        </div>
       </div>
       <div className="tree">
         {loading && <div className="muted pad">Loading...</div>}
@@ -29,6 +34,7 @@ function TreeNode({ node, selectedPath, onSelect, depth }) {
 function SpecFile({ file, selectedPath, onSelect, depth }) {
   const scenarios = file.scenarios || [];
   const isFileSelected = selectedPath === file.specPath;
+  const completedCount = scenarios.filter((scenario) => scenario.hasResponse).length;
 
   // A spec with scenarios always shows as expandable
   if (scenarios.length > 0) {
@@ -49,8 +55,14 @@ function SpecFile({ file, selectedPath, onSelect, depth }) {
             onSelect({ type: 'spec', ...file, name: file.name });
           }}
         >
+          <span className="tree-caret" />
+          <span className="tree-icon tree-icon-spec" aria-hidden="true" />
           <span className="tree-file-name">{file.name.replaceAll('_', ' ')}</span>
-          {file.hasResponses && <span className="tree-badge">●</span>}
+          {file.hasResponses && (
+            <span className="tree-count" title={`${completedCount}/${scenarios.length} scenarios have run output`}>
+              {completedCount}/{scenarios.length}
+            </span>
+          )}
         </summary>
         {scenarios.map((scenario, idx) => (
           <ScenarioRow
@@ -74,7 +86,8 @@ function SpecFile({ file, selectedPath, onSelect, depth }) {
       title={file.specPath}
       onClick={() => onSelect({ type: 'spec', ...file, name: file.name })}
     >
-      {file.name.replaceAll('_', ' ')}
+      <span className="tree-icon tree-icon-spec" aria-hidden="true" />
+      <span className="tree-file-name">{file.name.replaceAll('_', ' ')}</span>
     </button>
   );
 }
@@ -82,10 +95,11 @@ function SpecFile({ file, selectedPath, onSelect, depth }) {
 function ScenarioRow({ scenario, file, selectedPath, onSelect, depth }) {
   const itemPath = scenario.responsePath ?? `${file.specPath}#${scenario.lineNumber}`;
   const isActive = selectedPath === itemPath;
+  const runState = scenario.status || (scenario.hasResponse ? 'ran' : 'never');
 
   return (
     <button
-      className={`tree-file ${isActive ? 'active' : ''}`}
+      className={`tree-file tree-scenario ${isActive ? 'active' : ''}`}
       style={{ paddingLeft: 20 + (depth + 1) * 12 }}
       title={scenario.name}
       onClick={() =>
@@ -101,8 +115,10 @@ function ScenarioRow({ scenario, file, selectedPath, onSelect, depth }) {
         })
       }
     >
-      <span className={`scenario-dot ${scenario.hasResponse ? 'has-response' : 'no-response'}`} />
+      <span className={`scenario-dot scenario-dot--${runState}`} />
+      <span className="tree-icon tree-icon-scenario" aria-hidden="true" />
       <span className="scenario-label">{scenario.name.replaceAll('_', ' ')}</span>
+      {scenario.lineNumber != null && <span className="scenario-line">:{scenario.lineNumber}</span>}
     </button>
   );
 }
@@ -112,7 +128,9 @@ function TreeDir({ name, child, selectedPath, onSelect, depth }) {
   return (
     <details open={isOpen}>
       <summary className="tree-dir" style={{ paddingLeft: 8 + depth * 12 }}>
-        {name}
+        <span className="tree-caret" />
+        <span className="tree-icon tree-icon-folder" aria-hidden="true" />
+        <span className="tree-file-name">{name}</span>
       </summary>
       <TreeNode node={child} selectedPath={selectedPath} onSelect={onSelect} depth={depth + 1} />
     </details>

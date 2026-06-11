@@ -530,12 +530,12 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
           </>
         )}
         <div className="spacer" />
-        <div className="editor-mode-toggle">
+        <div className="editor-mode-toggle view-toggle">
           <button className={`filter${editMode === 'visual' ? ' active' : ''}`} onClick={() => setEditMode('visual')}>Visual</button>
           <button className={`filter${editMode === 'source' ? ' active' : ''}`} onClick={() => setEditMode('source')}>Source</button>
         </div>
-        <button className="filter" onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={saving} onClick={save}>
+        <button className="filter toolbar-ghost" onClick={onCancel}>Cancel</button>
+        <button className="primary save-btn" disabled={saving} onClick={save}>
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
@@ -558,10 +558,10 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
       ) : (
         <>
           <div className="node-editor-body">
-            <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 4, display: 'flex', gap: 8 }}>
+            <div className="canvas-action-bar">
               {selectedNodes.length > 0 && (
                 <button
-                  className="filter"
+                  className="filter toolbar-ghost"
                   onClick={copySelected}
                   title={`Copy ${selectedNodes.length} selected node${selectedNodes.length > 1 ? 's' : ''} (⌘C)`}
                 >
@@ -570,14 +570,14 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
               )}
               {clipboard.length > 0 && (
                 <button
-                  className="filter"
+                  className="filter toolbar-ghost"
                   onClick={pasteClipboard}
                   title={`Paste ${clipboard.length} node${clipboard.length > 1 ? 's' : ''} (⌘V)`}
                 >
                   Paste{clipboard.length > 1 ? ` (${clipboard.length})` : ''}
                 </button>
               )}
-              <button className="primary" onClick={() => { setInsertAfterNodeId(null); setIsPaletteOpen(true); }}>
+              <button className="primary add-node-btn" onClick={() => { setInsertAfterNodeId(null); setIsPaletteOpen(true); }}>
                 + Add Node
               </button>
             </div>
@@ -617,6 +617,7 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
                   value={paletteSearch}
                   onChange={(e) => setPaletteSearch(e.target.value)}
                 />
+                <div className="palette-hint">Type to filter node types, then choose a card to add it to the canvas.</div>
               </div>
               {paletteSearch.trim() ? (
                 <div className="palette-grid">
@@ -661,10 +662,10 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
                   addresses={addresses}
                   accountIds={accountIds}
                 />
-                <div className="inspector-actions" style={{ marginTop: 24, display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+                <div className="inspector-actions">
                   <button className="danger" onClick={deleteSelected}>Delete</button>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="filter" onClick={openInsertAfter} title="Insert a new node immediately after this one">
+                  <div className="inspector-action-group">
+                    <button className="filter toolbar-ghost" onClick={openInsertAfter} title="Insert a new node immediately after this one">
                       Insert After →
                     </button>
                     <button className="primary" onClick={() => setInspectingNodeId(null)}>Done</button>

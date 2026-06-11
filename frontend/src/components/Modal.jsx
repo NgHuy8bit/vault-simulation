@@ -15,8 +15,8 @@ export function Modal({ title, children, onClose, wide = false }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className={`modal-content${wide ? ' modal-content--wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="section-title" style={{ marginBottom: 0 }}>{title}</div>
-          <button className="modal-close" onClick={onClose}>×</button>
+          <div className="modal-title">{title}</div>
+          <button className="modal-close" onClick={onClose} title="Close">×</button>
         </div>
         <div className="modal-body">
           {children}

@@ -999,17 +999,19 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved, runSt
         <span className="spec-path-value">{spec.path}</span>
       </div>
       <div className="toolbar spec-toolbar">
-        <button className={`filter ${mode === 'visual' ? 'active' : ''}`} onClick={() => setMode('visual')}>
-          Visual
-        </button>
-        <button className={`filter ${mode === 'source' ? 'active' : ''}`} onClick={() => setMode('source')}>
-          Source
-        </button>
-        <button className="filter" onClick={onReload}>Reload</button>
+        <div className="view-toggle" aria-label="Editor mode">
+          <button className={`filter ${mode === 'visual' ? 'active' : ''}`} onClick={() => setMode('visual')}>
+            Visual
+          </button>
+          <button className={`filter ${mode === 'source' ? 'active' : ''}`} onClick={() => setMode('source')}>
+            Source
+          </button>
+        </div>
+        <button className="filter toolbar-ghost" onClick={onReload}>Reload</button>
         <div className="spacer" />
         {runLines !== null && (
           <button
-            className={`filter ${drawerOpen ? 'active' : ''}`}
+            className={`filter results-toggle ${drawerOpen ? 'active' : ''}`}
             onClick={() => setDrawerOpen((v) => !v)}
             title="Toggle run results panel"
           >
@@ -1024,7 +1026,7 @@ export function SpecView({ scenario, spec, summary, onReload, onSpecSaved, runSt
         >
           {runStatus === 'running' ? '● Running' : '▶ Run All'}
         </button>
-        <button className="primary" onClick={() => setEditing(true)}>
+        <button className="primary edit-spec-btn" onClick={() => setEditing(true)}>
           {filterScenarioIndex != null ? 'Edit scenario' : 'Edit spec'}
         </button>
       </div>
