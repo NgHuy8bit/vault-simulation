@@ -1,14 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { LineChart } from '@mui/x-charts/LineChart';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
 
 import { addressColor, eventColor } from '../utils/colors.js';
 import { amount, tsShort } from '../utils/format.js';
 
-const W = 1320;
-const H = 500;
-const ML = 50;
-const MR = 14;
-const MT = 28;
-const MB = 38;
+// Left/right offsets of the chart drawing area, in px. The MUI chart uses
+// margin.left(0) + yAxis.width(50) on the left and margin.right(14) on the
+// right; EventStrip mirrors the same values so event ticks line up exactly.
+const AXIS_LEFT = 56;
+const AXIS_RIGHT = 14;
+const CHART_HEIGHT = 480;
+// Above this many real data points, hide per-point marks — the step line
+// already shows every change. Marks only help when zoomed into few points.
+const MAX_POINT_MARKS = 150;
+
+// 1_008_220 → "1M", 850_000 → "850K" — keeps y-axis labels short.
+function compactAmount(value) {
+  const abs = Math.abs(value);
+  if (abs >= 1e9) return `${(value / 1e9).toFixed(1).replace(/\.0$/, '')}B`;
+  if (abs >= 1e6) return `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (abs >= 1e3) return `${Math.round(value / 1e3)}K`;
+  return String(Math.round(value));
+}
+
+const darkTheme = createTheme({
+  palette: { mode: 'dark', background: { default: '#050d1a', paper: '#0a1828' } },
+  typography: { fontSize: 12 },
+});
 
 export function Diagram({ summary }) {
   const [account, setAccount] = useState(summary.accounts[0] || '');
@@ -19,8 +38,9 @@ export function Diagram({ summary }) {
   const addresses = Object.keys(denomHistory).sort();
   const [enabled, setEnabled] = useState(new Set(addresses.slice(0, Math.min(6, addresses.length))));
   const [zoom, setZoom] = useState(null);
-  const denominationKey = denominations.join('\u0000');
-  const addressKey = addresses.join('\u0000');
+  const denominationKey = denominations.join(' ');
+  const addressKey = addresses.join(' ');
+  const wheelRaf = useRef(0);
 
   useEffect(() => {
     setAccount(summary.accounts[0] || '');
@@ -39,6 +59,8 @@ export function Diagram({ summary }) {
     setEnabled(new Set(addresses.slice(0, Math.min(6, addresses.length))));
     setZoom(null);
   }, [account, denomination, addressKey]);
+
+  useEffect(() => () => cancelAnimationFrame(wheelRaf.current), []);
 
   const series = useMemo(
     () =>
@@ -84,11 +106,69 @@ export function Diagram({ summary }) {
     [summary.events],
   );
 
-  const allTimes = [...series.flatMap((item) => item.points.map((point) => point.ms)), ...markers.map((marker) => marker.ms)];
-  const fullMin = allTimes.length ? Math.min(...allTimes) : 0;
-  const fullMax = allTimes.length ? Math.max(...allTimes) : 1;
+  const { fullMin, fullMax } = useMemo(() => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const item of series) {
+      for (const point of item.points) {
+        if (point.ms < min) min = point.ms;
+        if (point.ms > max) max = point.ms;
+      }
+    }
+    for (const marker of markers) {
+      if (marker.ms < min) min = marker.ms;
+      if (marker.ms > max) max = marker.ms;
+    }
+    if (min === Infinity) return { fullMin: 0, fullMax: 1 };
+    return { fullMin: min, fullMax: max };
+  }, [series, markers]);
+
   const tMin = zoom?.min ?? fullMin;
   const tMax = zoom?.max ?? fullMax;
+  const hasData = series.length > 0 || markers.length > 0;
+
+  // MUI LineChart needs all series aligned on a shared x-axis. Build the
+  // union of every timestamp, then forward-fill each series (step semantics
+  // — a balance keeps its value until the next change, so filling forward is
+  // exact, not interpolation).
+  const { xData, muiSeries } = useMemo(() => {
+    const unionSet = new Set();
+    for (const item of series) {
+      for (const point of item.points) unionSet.add(point.ms);
+    }
+    const union = [...unionSet].sort((a, b) => a - b);
+    const indexOfMs = new Map(union.map((ms, i) => [ms, i]));
+
+    const totalPoints = series.reduce((acc, item) => acc + item.points.length, 0);
+    const showMarks = totalPoints <= MAX_POINT_MARKS;
+
+    const built = series.map((item) => {
+      const data = new Array(union.length).fill(null);
+      const realIdx = new Set();
+      let pi = 0;
+      let current = null;
+      for (let i = 0; i < union.length; i++) {
+        while (pi < item.points.length && item.points[pi].ms <= union[i]) {
+          current = item.points[pi];
+          pi++;
+        }
+        data[i] = current ? current.amount : null;
+        if (current && current.ms === union[i]) realIdx.add(i);
+      }
+      return {
+        id: item.label,
+        label: item.label,
+        color: item.color,
+        data,
+        curve: 'stepAfter',
+        area: true,
+        showMark: showMarks ? ({ index }) => realIdx.has(index) : false,
+        valueFormatter: (value) => (value == null ? '' : amount(value)),
+      };
+    });
+
+    return { xData: union.map((ms) => new Date(ms)), muiSeries: built };
+  }, [series]);
 
   function toggleAddress(address) {
     const next = new Set(enabled);
@@ -98,24 +178,36 @@ export function Diagram({ summary }) {
 
   function onWheel(event) {
     event.preventDefault();
-    if (!allTimes.length) return;
-    const range = tMax - tMin || 1;
-    const nextRange = event.deltaY > 0 ? range * 1.4 : range / 1.4;
-    if (nextRange < 3_600_000) return;
+    if (!hasData) return;
+    const { deltaY, clientX } = event;
     const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    const center = tMin + range * ratio;
-    let min = center - nextRange * ratio;
-    let max = center + nextRange * (1 - ratio);
-    if (min < fullMin) {
-      min = fullMin;
-      max = min + nextRange;
-    }
-    if (max > fullMax) {
-      max = fullMax;
-      min = max - nextRange;
-    }
-    setZoom({ min: Math.max(fullMin, min), max: Math.min(fullMax, max) });
+    if (wheelRaf.current) return;
+    wheelRaf.current = requestAnimationFrame(() => {
+      wheelRaf.current = 0;
+      setZoom((current) => {
+        const curMin = current?.min ?? fullMin;
+        const curMax = current?.max ?? fullMax;
+        const range = curMax - curMin || 1;
+        const nextRange = deltaY > 0 ? range * 1.4 : range / 1.4;
+        if (nextRange < 3_600_000) return current;
+        if (nextRange >= fullMax - fullMin) return null;
+        const innerLeft = rect.left + AXIS_LEFT;
+        const innerWidth = Math.max(1, rect.width - AXIS_LEFT - AXIS_RIGHT);
+        const ratio = Math.max(0, Math.min(1, (clientX - innerLeft) / innerWidth));
+        const center = curMin + range * ratio;
+        let min = center - nextRange * ratio;
+        let max = center + nextRange * (1 - ratio);
+        if (min < fullMin) {
+          min = fullMin;
+          max = min + nextRange;
+        }
+        if (max > fullMax) {
+          max = fullMax;
+          min = max - nextRange;
+        }
+        return { min: Math.max(fullMin, min), max: Math.min(fullMax, max) };
+      });
+    });
   }
 
   return (
@@ -175,7 +267,52 @@ export function Diagram({ summary }) {
             </div>
           </div>
           <div className="chart-group" onWheel={onWheel}>
-            <BalanceChart series={series} markers={markers} tMin={tMin} tMax={tMax} denomination={denomination} />
+            <ThemeProvider theme={darkTheme}>
+              <LineChart
+                height={CHART_HEIGHT}
+                series={muiSeries}
+                xAxis={[
+                  {
+                    data: xData,
+                    scaleType: 'time',
+                    min: new Date(tMin),
+                    max: new Date(tMax),
+                    tickNumber: 8,
+                    disableTicks: true,
+                    valueFormatter: (date, context) => {
+                      if (context.location === 'tooltip') {
+                        return `${date.toISOString().replace('T', ' ').slice(0, 19)} UTC`;
+                      }
+                      const spanDays = (tMax - tMin) / 86_400_000;
+                      const iso = date.toISOString();
+                      return spanDays > 14 ? iso.slice(5, 10) : iso.slice(5, 16).replace('T', ' ');
+                    },
+                  },
+                ]}
+                yAxis={[
+                  {
+                    width: AXIS_LEFT,
+                    disableTicks: true,
+                    valueFormatter: (value) => compactAmount(value),
+                  },
+                ]}
+                margin={{ top: 16, right: AXIS_RIGHT, bottom: 4, left: 0 }}
+                grid={{ horizontal: true }}
+                hideLegend
+                skipAnimation
+                axisHighlight={{ x: 'line' }}
+                sx={{
+                  '& .MuiChartsAxis-line': { stroke: '#1e293b' },
+                  '& .MuiChartsAxis-tickLabel': { fill: '#5b6b82', fontSize: 11 },
+                  '& .MuiChartsGrid-line': { stroke: 'rgba(30, 41, 59, 0.5)' },
+                  '& .MuiLineElement-root': { strokeWidth: 2 },
+                  '& .MuiAreaElement-root': { opacity: 0.1 },
+                  '& .MuiMarkElement-root': { strokeWidth: 1.5 },
+                  '& .MuiChartsAxisHighlight-root': { stroke: '#334155', strokeDasharray: '4 4' },
+                  backgroundColor: 'transparent',
+                }}
+              />
+            </ThemeProvider>
             <EventStrip markers={markers} tMin={tMin} tMax={tMax} />
           </div>
           <div className="chart-legend">
@@ -198,146 +335,28 @@ export function Diagram({ summary }) {
   );
 }
 
-function BalanceChart({ series, markers, tMin, tMax, denomination }) {
-  const svgRef = useRef(null);
-  const [hover, setHover] = useState(null);
+// Event timeline strip below the chart. Uses real pixel coordinates (via
+// ResizeObserver) with the same left/right offsets as the MUI chart so the
+// ticks align with the chart's time axis at any container width.
+const EventStrip = memo(function EventStrip({ markers, tMin, tMax }) {
+  const wrapRef = useRef(null);
+  const [width, setWidth] = useState(1320);
 
-  const pw = W - ML - MR;
-  const ph = H - MT - MB;
-  const allPoints = series.flatMap((item) => item.points);
-  const values = allPoints.map((point) => point.amount).filter((value) => !Number.isNaN(value));
-  const yMin = Math.min(0, ...values);
-  const yMax = Math.max(1, ...values) * 1.08;
-  const yRange = yMax - yMin || 1;
-  const tRange = tMax - tMin || 1;
-  const xOf = (ms) => ML + ((ms - tMin) / tRange) * pw;
-  const yOf = (value) => MT + ph - ((value - yMin) / yRange) * ph;
-  const visibleMarkers = markers.filter((marker) => marker.ms >= tMin && marker.ms <= tMax);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect?.width;
+      if (next) setWidth(next);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
-  function getStepValueAt(points, ms) {
-    let result = null;
-    for (const p of points) {
-      if (p.ms <= ms) result = p;
-      else break;
-    }
-    return result;
-  }
-
-  function onMouseMove(e) {
-    const rect = svgRef.current.getBoundingClientRect();
-    const svgX = Math.max(ML, Math.min(W - MR, ((e.clientX - rect.left) / rect.width) * W));
-    const ms = tMin + ((svgX - ML) / pw) * tRange;
-    const tooltipWidth = 320;
-    const tooltipHeight = 180;
-    const viewportWidth = window.innerWidth || tooltipWidth + 24;
-    const viewportHeight = window.innerHeight || tooltipHeight + 24;
-    const preferLeft = e.clientX > viewportWidth - tooltipWidth - 36;
-    const rawLeft = preferLeft ? e.clientX - tooltipWidth - 14 : e.clientX + 14;
-    const left = Math.max(12, Math.min(rawLeft, viewportWidth - tooltipWidth - 12));
-    const top = Math.max(72, Math.min(e.clientY - 18, viewportHeight - tooltipHeight - 12));
-    setHover({ svgX, ms, left, top });
-  }
-
-  const hoverRows = hover
-    ? series.map((item) => ({ label: item.label, color: item.color, point: getStepValueAt(item.points, hover.ms) })).filter((r) => r.point)
-    : [];
-  const gridTicks = Array.from({ length: 5 }, (_, index) => index);
-
-  return (
-    <div className="balance-chart-wrap">
-      <svg
-        ref={svgRef}
-        className="chart-svg"
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        onMouseMove={onMouseMove}
-        onMouseLeave={() => setHover(null)}
-      >
-        <defs>
-          <clipPath id="balanceChartClip">
-            <rect x={ML} y={MT} width={pw} height={ph} />
-          </clipPath>
-          <linearGradient id="chartSurface" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#091422" />
-            <stop offset="100%" stopColor="#040a13" />
-          </linearGradient>
-        </defs>
-        <rect width={W} height={H} fill="url(#chartSurface)" />
-        {gridTicks.map((index) => {
-          const value = yMin + (yRange * index) / (gridTicks.length - 1);
-          const y = yOf(value);
-          return (
-            <g key={index}>
-              <line x1={ML} y1={y} x2={W - MR} y2={y} className="chart-grid-line" />
-              <text x={ML - 8} y={y + 4} textAnchor="end" className="chart-axis-label">
-                {amount(Math.round(value))}
-              </text>
-            </g>
-          );
-        })}
-        <line x1={ML} y1={MT} x2={ML} y2={MT + ph} className="chart-axis-line" />
-        <line x1={ML} y1={MT + ph} x2={W - MR} y2={MT + ph} className="chart-axis-line" />
-        <g clipPath="url(#balanceChartClip)">
-          {visibleMarkers.map((marker) => {
-            const x = xOf(marker.ms);
-            return (
-              <line
-                key={`${marker.id}-${marker.ms}`}
-                x1={x}
-                y1={MT + ph - 14}
-                x2={x}
-                y2={MT + ph}
-                stroke={eventColor(marker.type)}
-                className="chart-event-tick"
-              />
-            );
-          })}
-          {series.map((item) => (
-            <path key={item.label} d={stepPath(item.points, xOf, yOf, tMax)} fill="none" stroke={item.color} className="chart-series-line" />
-          ))}
-          {series.flatMap((item) =>
-            item.points.map((point) => {
-              const x = xOf(point.ms);
-              if (x < ML || x > W - MR) return null;
-              return (
-                <circle key={`${item.label}-${point.timestamp}`} cx={x} cy={yOf(point.amount)} r="3.2" fill={item.color} className="chart-point" />
-              );
-            }),
-          )}
-          {hover && (
-            <line x1={hover.svgX} y1={MT} x2={hover.svgX} y2={MT + ph} className="chart-hover-line" pointerEvents="none" />
-          )}
-          {hover &&
-            hoverRows.map((row) => {
-              const y = yOf(row.point.amount);
-              return <circle key={row.label} cx={hover.svgX} cy={y} r="5" fill={row.color} className="chart-hover-point" pointerEvents="none" />;
-            })}
-        </g>
-      </svg>
-      {hover && hoverRows.length > 0 && (
-        <div
-          className="chart-tooltip"
-          style={{ position: 'fixed', left: hover.left, top: hover.top, pointerEvents: 'none' }}
-        >
-          <div className="chart-tooltip-time">{new Date(hover.ms).toISOString().replace('T', ' ').slice(0, 19)} UTC</div>
-          {hoverRows.map((row) => (
-            <div key={row.label} className="chart-tooltip-row">
-              <span className="chart-tooltip-swatch" style={{ background: row.color }} />
-              <span className="chart-tooltip-label">{row.label}</span>
-              <span className="chart-tooltip-value">{amount(row.point.raw)} {denomination}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EventStrip({ markers, tMin, tMax }) {
   const height = 72;
   const tRange = tMax - tMin || 1;
-  // x-coordinates match BalanceChart exactly (same ML, MR, W)
-  const xOf = (ms) => ML + ((ms - tMin) / tRange) * (W - ML - MR);
+  const innerWidth = Math.max(1, width - AXIS_LEFT - AXIS_RIGHT);
+  const xOf = (ms) => AXIS_LEFT + ((ms - tMin) / tRange) * innerWidth;
 
   const N_TICKS = 5;
   const ticks = Array.from({ length: N_TICKS }, (_, i) => {
@@ -350,57 +369,46 @@ function EventStrip({ markers, tMin, tMax }) {
   }
 
   return (
-    <svg className="event-strip-svg" viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none">
-      <rect width={W} height={height} fill="#050b15" />
-      {/* Baseline */}
-      <line x1={ML} y1={32} x2={W - MR} y2={32} className="event-strip-baseline" />
-      {/* Event tick marks */}
-      {markers.map((marker) => {
-        const x = xOf(marker.ms);
-        if (x < ML - 2 || x > W - MR + 2) return null;
-        return (
-          <g key={`${marker.id ?? marker.summary}-${marker.ms}-${marker.type}`}>
-            <line x1={x} y1={8} x2={x} y2={27} stroke={eventColor(marker.type)} className="event-strip-tick" />
-            <title>{`${tsShort(marker.timestamp)} · ${marker.type}\n${marker.summary}`}</title>
+    <div ref={wrapRef} className="event-strip-wrap">
+      <svg className="event-strip-svg" width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        <rect width={width} height={height} fill="#050b15" />
+        {/* Baseline */}
+        <line x1={AXIS_LEFT} y1={32} x2={width - AXIS_RIGHT} y2={32} className="event-strip-baseline" />
+        {/* Event tick marks */}
+        {markers.map((marker) => {
+          const x = xOf(marker.ms);
+          if (x < AXIS_LEFT - 2 || x > width - AXIS_RIGHT + 2) return null;
+          return (
+            <g key={`${marker.id ?? marker.summary}-${marker.ms}-${marker.type}`}>
+              <line x1={x} y1={8} x2={x} y2={27} stroke={eventColor(marker.type)} className="event-strip-tick" />
+              <title>{`${tsShort(marker.timestamp)} · ${marker.type}\n${marker.summary}`}</title>
+            </g>
+          );
+        })}
+        {/* Time axis tick marks */}
+        {ticks.map(({ ms, x, i }) => (
+          <g key={ms}>
+            <line x1={x} y1={32} x2={x} y2={38} className="event-axis-tick" />
+            <text
+              x={x}
+              y={50}
+              textAnchor={i === 0 ? 'start' : i === N_TICKS - 1 ? 'end' : 'middle'}
+              className="event-axis-label"
+            >
+              {fmtTick(ms)}
+            </text>
           </g>
-        );
-      })}
-      {/* Time axis tick marks */}
-      {ticks.map(({ ms, x, i }) => (
-        <g key={ms}>
-          <line x1={x} y1={32} x2={x} y2={38} className="event-axis-tick" />
-          <text
-            x={x}
-            y={50}
-            textAnchor={i === 0 ? 'start' : i === N_TICKS - 1 ? 'end' : 'middle'}
-            className="event-axis-label"
-          >
-            {fmtTick(ms)}
-          </text>
-        </g>
-      ))}
-      {/* Color key row — positioned below tick labels */}
-      {['accepted', 'rejected', 'notification', 'accrual'].map((kind, index) => (
-        <g key={kind} transform={`translate(${ML + index * 94}, 63)`}>
-          <rect width={8} height={4} rx={1} fill={eventColor(kind)} />
-          <text x={12} y={4} className="event-key-label">
-            {kind}
-          </text>
-        </g>
-      ))}
-    </svg>
+        ))}
+        {/* Color key row — positioned below tick labels */}
+        {['accepted', 'rejected', 'notification', 'accrual'].map((kind, index) => (
+          <g key={kind} transform={`translate(${AXIS_LEFT + index * 94}, 63)`}>
+            <rect width={8} height={4} rx={1} fill={eventColor(kind)} />
+            <text x={12} y={4} className="event-key-label">
+              {kind}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
   );
-}
-
-function stepPath(points, xOf, yOf, tMax) {
-  if (!points.length) return '';
-  let path = '';
-  let previous = null;
-  for (const point of points) {
-    const x = xOf(point.ms);
-    const y = yOf(point.amount);
-    path += path ? ` H${x.toFixed(1)} V${y.toFixed(1)}` : `M${x.toFixed(1)},${y.toFixed(1)}`;
-    previous = point;
-  }
-  return previous ? `${path} H${xOf(tMax).toFixed(1)}` : path;
-}
+});

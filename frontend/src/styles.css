@@ -721,6 +721,43 @@ button.danger {
   grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1fr);
 }
 
+/* Parameter change history (Accounts tab) */
+.param-change-row {
+  grid-template-columns: 150px minmax(160px, 0.8fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.param-change-row span {
+  overflow-wrap: anywhere;
+}
+.param-old-value {
+  color: #64748b;
+  text-decoration: line-through;
+  text-decoration-color: rgba(100, 116, 139, 0.55);
+}
+.param-new-value {
+  color: #4ade80;
+}
+.param-changed-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: #f59e0b;
+  font-size: 12px;
+}
+.param-changed-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
 .spec-page {
   display: flex !important;
   flex-direction: column;

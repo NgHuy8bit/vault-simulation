@@ -62,10 +62,10 @@ def process_simulation_response(raw_data: Any, request_data: Any = None) -> dict
         )
 
     timestamps = [event["timestamp"] for event in events if event["timestamp"]]
-    instance_params = _extract_instance_params(request_data)
+    instance_params, param_history = _extract_instance_params(request_data)
     return {
         "events": events,
-        "balances": _latest_balances(accounts_latest, instance_params),
+        "balances": _latest_balances(accounts_latest, instance_params, param_history),
         "balance_history": balance_history,
         "account_history": account_history,
         "accounts": sorted(account_ids),
@@ -174,22 +174,54 @@ def _collect_balances(
                 )
 
 
-def _extract_instance_params(request_data: Any) -> dict[str, dict[str, str]]:
+def _extract_instance_params(request_data: Any) -> tuple[dict[str, dict[str, str]], dict[str, list[dict[str, str]]]]:
+    """Return (final_params, change_history) per account.
+
+    Initial values come from create_account.instance_param_vals; subsequent
+    "Change instance parameters" steps appear in the request as
+    create_account_update.instance_param_vals_update and are applied in
+    timestamp order on top of the initial values.
+    """
     if not isinstance(request_data, dict):
-        return {}
+        return {}, {}
     result: dict[str, dict[str, str]] = {}
+    updates: list[tuple[str, str, dict[str, str]]] = []  # (timestamp, account_id, params)
     for instruction in request_data.get("instructions", []) or []:
         create = instruction.get("create_account")
-        if not create:
+        if create:
+            account_id = create.get("id") or create.get("account_id", "")
+            params = create.get("instance_param_vals", {}) or {}
+            if account_id and params:
+                result[account_id] = dict(params)
             continue
-        account_id = create.get("id") or create.get("account_id", "")
-        params = create.get("instance_param_vals", {}) or {}
-        if account_id and params:
-            result[account_id] = params
-    return result
+        update = instruction.get("create_account_update")
+        if update:
+            account_id = update.get("account_id", "")
+            params = (update.get("instance_param_vals_update") or {}).get("instance_param_vals", {}) or {}
+            if account_id and params:
+                updates.append((instruction.get("timestamp", ""), account_id, params))
+
+    history: dict[str, list[dict[str, str]]] = {}
+    for timestamp, account_id, params in sorted(updates, key=lambda u: u[0]):
+        current = result.setdefault(account_id, {})
+        for name, value in params.items():
+            history.setdefault(account_id, []).append(
+                {
+                    "timestamp": timestamp,
+                    "name": name,
+                    "old_value": current.get(name, ""),
+                    "new_value": value,
+                }
+            )
+            current[name] = value
+    return result, history
 
 
-def _latest_balances(accounts_latest: dict[str, dict[str, Any]], instance_params: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+def _latest_balances(
+    accounts_latest: dict[str, dict[str, Any]],
+    instance_params: dict[str, dict[str, str]] | None = None,
+    param_history: dict[str, list[dict[str, str]]] | None = None,
+) -> dict[str, Any]:
     balances: dict[str, Any] = {}
     for account_id, by_key in accounts_latest.items():
         monetary = []
@@ -212,7 +244,16 @@ def _latest_balances(accounts_latest: dict[str, dict[str, Any]], instance_params
                 params.append({"name": balance["address"], "value": balance["amount"]})
         if instance_params and account_id in instance_params:
             params = [{"name": k, "value": v} for k, v in instance_params[account_id].items()]
-        balances[account_id] = {"monetary": monetary, "params": params, "all": all_balances}
+        changes = (param_history or {}).get(account_id, [])
+        changed_names = {c["name"] for c in changes}
+        for p in params:
+            p["changed"] = p["name"] in changed_names
+        balances[account_id] = {
+            "monetary": monetary,
+            "params": params,
+            "param_changes": changes,
+            "all": all_balances,
+        }
     return balances
 
 
