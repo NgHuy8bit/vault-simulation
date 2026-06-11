@@ -318,7 +318,6 @@ button {
 }
 
 .toolbar label,
-.node-editor-top label,
 .inspector-form label {
   display: grid;
   gap: 6px;
@@ -1390,30 +1389,95 @@ button.danger {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  gap: 12px;
-  padding: 14px;
+  gap: 0;
+  padding: 0;
 }
+
+/* When used as the full-page editor, strip the shared card border/bg */
+.react-flow-editor {
+  border: none !important;
+  border-radius: 0 !important;
+  background: #050d1a !important;
+}
+
+/* ── Editor toolbar ───────────────────────────────────────────────────────── */
 
 .node-editor-top {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 0.8fr) minmax(260px, 1.4fr) auto auto auto;
-  gap: 10px;
-  align-items: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #07101d;
+  border-bottom: 1px solid #1e293b;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
+/* Inline label: "FIELD NAME  [input]" on one row */
+.node-editor-top label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.node-editor-top label input {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+  background: #0a1828;
+  border: 1px solid #1e2d40;
+  border-radius: 5px;
+  color: #e2e8f0;
+  min-width: 110px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.node-editor-top label input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.14);
+}
+
+/* File path label stretches to fill remaining space */
+.node-editor-top label.wide-field {
+  flex: 1;
+  min-width: 0;
+  max-width: 400px;
+}
+
+.node-editor-top label.wide-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Visual / Source toggle in the toolbar */
 .editor-mode-toggle {
   display: flex;
   gap: 4px;
-  align-self: end;
-  padding-bottom: 1px;
+  align-self: center;
+  flex-shrink: 0;
 }
+
+/* Toast inside the editor: don't let it span edge-to-edge */
+.node-editor > .toast {
+  margin: 8px 16px 0;
+  flex-shrink: 0;
+}
+
+/* ── Source editor ────────────────────────────────────────────────────────── */
 
 .source-editor-wrap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin-top: 4px;
+  padding: 14px;
 }
 
 .source-editor-notice {
@@ -1449,11 +1513,13 @@ button.danger {
   min-width: 0;
 }
 
+/* ── Visual editor canvas ─────────────────────────────────────────────────── */
+
 .node-editor-body {
   position: relative;
-  min-height: 650px;
-  border: 1px solid #1e293b;
-  border-radius: 8px;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid #1e293b;
   overflow: hidden;
   background: #020617;
 }
@@ -1485,6 +1551,12 @@ button.danger {
 
 .modal-content--wide {
   max-width: min(94vw, 1200px);
+  height: min(88vh, 860px);
+}
+
+.modal-content--wide .modal-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .modal-header {
@@ -1682,29 +1754,73 @@ button.danger {
 }
 
 /* Node Palette Grid */
+.palette-search {
+  margin-bottom: 16px;
+}
+.palette-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 14px;
+  background: #0a1828;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 14px;
+  outline: none;
+}
+.palette-search input:focus {
+  border-color: #38bdf8;
+}
+.palette-search input::placeholder {
+  color: #475569;
+}
+
+.palette-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.palette-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
 .palette-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px;
 }
 
 .palette-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: #0f172a;
+  gap: 8px;
+  background: #0a1828;
   border: 1px solid #1e293b;
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 7px;
+  padding: 8px 10px;
   color: #cbd5e1;
   cursor: pointer;
   text-align: left;
-  transition: all 0.1s;
+  transition: border-color 0.1s, background 0.1s;
+  font-size: 13px;
+}
+.palette-btn .node-type {
+  flex-shrink: 0;
+  font-size: 9px;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .palette-btn:hover {
   border-color: #38bdf8;
-  background: #111c31;
+  background: #0f1f36;
 }
 
 /* React Flow Custom Node */
@@ -2047,17 +2163,105 @@ button.danger {
   min-width: 120px;
 }
 
+/* posting_instruction_batch variant toggle */
+.pib-variant-toggle {
+  display: flex;
+  gap: 2px;
+  background: #0a1828;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 2px;
+}
+.pib-variant-toggle button {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  text-transform: lowercase;
+}
+.pib-variant-toggle button.active {
+  background: #1e3a5f;
+  color: #60a5fa;
+}
+
+/* posting_instruction_batch instruction editor table */
+.pib-table {
+  overflow-x: auto;
+  width: 100%;
+}
+.pib-row {
+  display: grid;
+  grid-template-columns: 110px 85px 60px 1fr 1fr 90px 90px 30px;
+  gap: 5px;
+  align-items: center;
+  min-width: max-content;
+}
+.pib-row--make {
+  grid-template-columns: 130px 1fr 1fr 80px 30px;
+  align-items: start;
+}
+.pib-row--make .pib-details-area {
+  min-height: 52px;
+}
+.pib-row--make button.pib-delete {
+  margin-top: 4px;
+}
+.pib-row-head {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0 0 6px;
+  border-bottom: 1px solid #1e293b;
+  margin-bottom: 4px;
+}
+.pib-instr-group {
+  padding: 6px 0 4px;
+  border-bottom: 1px solid #1e293b;
+}
+.pib-instr-group:last-child {
+  border-bottom: none;
+}
+.pib-row input {
+  height: 28px;
+  padding: 0 5px;
+  font-size: 12px;
+}
+button.pib-delete {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+.pib-details-row {
+  padding: 4px 0 2px;
+}
+.pib-details-area {
+  font-size: 11.5px;
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 38px;
+  width: 100%;
+  box-sizing: border-box;
+  background: #060f1d;
+  border: 1px solid #1e293b;
+  border-radius: 4px;
+  color: #cbd5e1;
+  padding: 6px 8px;
+}
+
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 260px minmax(0, 1fr);
-  }
-
-  .node-editor-body {
-    grid-template-columns: 170px minmax(260px, 1fr);
-  }
-
-  .node-inspector {
-    grid-column: 1 / -1;
   }
 }
 
@@ -2084,11 +2288,6 @@ button.danger {
   .diagram-tab {
     padding-left: 14px;
     padding-right: 14px;
-  }
-
-  .node-editor-top,
-  .node-editor-body {
-    grid-template-columns: 1fr;
   }
 
   .table-row {

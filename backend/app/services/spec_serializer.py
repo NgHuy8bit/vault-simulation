@@ -249,7 +249,7 @@ def _serialize_balance_check(data: dict[str, Any]) -> list[str]:
     _DEF_PHASE = "POSTING_PHASE_COMMITTED"
     _DEF_ASSET = "COMMERCIAL_BANK_MONEY"
 
-    rows = sorted(data.get("rows") or [], key=lambda row: row.get("timestamp", ""))
+    rows = data.get("rows") or []
     denomination = data.get("denomination") or (rows[0].get("denomination") if rows else "VND")
     account_ids = {row.get("account_id", "") for row in rows}
 
@@ -447,13 +447,19 @@ def _serialize_custom_instruction(data: dict[str, Any]) -> list[str]:
 def _serialize_posting_instruction_batch(data: dict[str, Any]) -> list[str]:
     timestamp = data.get("timestamp", "")
     instructions = data.get("instructions") or []
+    variant = data.get("variant", "initiate")
+
+    if variant == "initiate":
+        header_line = f'* At "{timestamp}", initiate an instruction batch with:'
+    else:
+        header_line = f'* At "{timestamp}", make a posting instruction batch with the following posting instructions:'
 
     if not instructions:
-        return [f'* At "{timestamp}", make a posting instruction batch with the following posting instructions:']
+        return [header_line]
 
     headers = list(instructions[0].keys()) if instructions else []
     return [
-        f'* At "{timestamp}", make a posting instruction batch with the following posting instructions:',
+        header_line,
         "",
         _format_table(headers, instructions),
     ]
@@ -515,7 +521,7 @@ def _format_table(headers: list[str], rows: list[dict[str, Any]]) -> str:
 
 def _serialize_balance_check_multi(data: dict[str, Any]) -> list[str]:
     denomination = data.get("denomination") or "VND"
-    rows = sorted(data.get("rows") or [], key=lambda r: r.get("timestamp", ""))
+    rows = data.get("rows") or []
 
     _DEF_PHASE = "POSTING_PHASE_COMMITTED"
     _DEF_ASSET = "COMMERCIAL_BANK_MONEY"

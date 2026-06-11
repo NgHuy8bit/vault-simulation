@@ -14,24 +14,19 @@
 #   `gauge run` then becomes a plain local subprocess.
 #
 # ── First-time build ──────────────────────────────────────────────────────────
-#   cp runner/.env.example runner/.env   # fill in GITHUB_TOKEN
-#
-#   # Option A — token in shell env (recommended):
-#   export GITHUB_TOKEN=ghp_xxxx
-#   docker compose build viewer-runner
-#
-#   # Option B — token passed inline:
-#   GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner
-#
+#   make docker-build   ← auto-extracts GitHub token from macOS Keychain
 #   docker compose up -d
 #
-#   The build downloads and pre-installs all Python deps (71 packages), bun
-#   packages and the Gauge Python plugin into the image. After that,
-#   `docker compose up` starts in ~3 seconds — no downloads at container start.
+#   Or manually if needed:
+#     GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner
+#
+#   The build downloads and pre-installs all Python deps, bun packages and the
+#   Gauge Python plugin into the image. After that `docker compose up` starts
+#   in ~3 seconds — no downloads at container start.
 #
 # ── Rebuilding after dependency changes ──────────────────────────────────────
 #   If pyproject.toml / uv.lock / requirements.txt change:
-#     GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner
+#     make docker-build
 #     docker compose up -d --force-recreate viewer-runner
 #
 # ── Daily usage (no dependency changes) ──────────────────────────────────────
@@ -52,10 +47,10 @@ services:
         UV_VERSION: "0.8.9"
         BUN_VERSION: "1.2.1"
       secrets:
-        # GITHUB_TOKEN is passed as a BuildKit secret: never stored in any
-        # image layer or visible in `docker history`. Set it in your shell
-        # before running `docker compose build`:
-        #   export GITHUB_TOKEN=ghp_xxxx
+        # GITHUB_TOKEN is passed as a BuildKit secret — never stored in any
+        # image layer or visible in `docker history`.
+        # Use `make docker-build` to auto-extract it from macOS Keychain,
+        # or set it manually: GITHUB_TOKEN=ghp_xxx docker compose build viewer-runner
         - github_token
     container_name: sim-viewer-runner
     user: vscode

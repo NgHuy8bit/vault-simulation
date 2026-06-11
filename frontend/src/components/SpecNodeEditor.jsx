@@ -1,6 +1,6 @@
 import '@xyflow/react/dist/style.css';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -19,50 +19,55 @@ import { StepInspector } from './StepInspector.jsx';
 import { SpecCustomNode } from './SpecCustomNode.jsx';
 import { Modal } from './Modal.jsx';
 
-const PALETTE = [
-  // Setup
-  ['config', 'Config'],
-  ['product', 'Product'],
-  ['account', 'Account'],
-  // Posting instructions
-  ['inbound', 'Inbound Hard Settlement'],
-  ['outbound', 'Outbound Hard Settlement'],
-  ['inbound_auth', 'Inbound Authorisation'],
-  ['outbound_auth', 'Outbound Authorisation'],
-  ['transfer', 'Transfer'],
-  ['settlement', 'Settlement'],
-  ['release', 'Release Event'],
-  ['custom_instruction', 'Custom Instruction'],
-  ['posting_instruction_batch', 'Posting Batch'],
-  ['auth_adjustment', 'Auth Adjustment'],
-  // Checks
-  ['balance_check', 'Balance Check'],
-  ['balance_check_multi', 'Balance Check (multi-account)'],
-  ['accepted', 'Verify Accepted'],
-  ['rejected', 'Verify Rejected'],
-  ['notification', 'Notification'],
-  ['no_notifications', 'No Notifications'],
-  ['schedule', 'Verify Schedule'],
-  ['parameter_rejected', 'Parameter Rejected'],
-  ['derived_parameters', 'Derived Parameters'],
-  ['derived_parameter_dict', 'Derived Param (single)'],
-  ['instruction_detail_check', 'Instruction Detail Check'],
-  ['batch_detail_check', 'Batch Detail Check'],
-  // Account changes
-  ['change_instance_params', 'Change Instance Params'],
-  ['change_template_params', 'Change Template Params'],
-  ['update_account_status', 'Update Account Status'],
-  ['account_close', 'Account Close (pending)'],
-  ['update_account_version', 'Update Account Version'],
-  // Flags
-  ['flag_definition', 'Flag Definition'],
-  ['flag', 'Set Flag'],
-  // Global params / misc
-  ['global_param', 'Global Parameter'],
-  ['exception_msg', 'Exception Message'],
-  // Structure
-  ['scenario', 'Scenario'],
+const PALETTE_SECTIONS = [
+  { label: 'Setup', items: [
+    ['config', 'Config'],
+    ['product', 'Product'],
+    ['account', 'Account'],
+    ['scenario', 'Scenario'],
+  ]},
+  { label: 'Posting', items: [
+    ['inbound', 'Inbound Hard Settlement'],
+    ['outbound', 'Outbound Hard Settlement'],
+    ['inbound_auth', 'Inbound Authorisation'],
+    ['outbound_auth', 'Outbound Authorisation'],
+    ['transfer', 'Transfer'],
+    ['settlement', 'Settlement'],
+    ['release', 'Release Event'],
+    ['custom_instruction', 'Custom Instruction'],
+    ['posting_instruction_batch', 'Posting Batch'],
+    ['auth_adjustment', 'Auth Adjustment'],
+  ]},
+  { label: 'Checks', items: [
+    ['balance_check', 'Balance Check'],
+    ['balance_check_multi', 'Balance Check (multi-account)'],
+    ['accepted', 'Verify Accepted'],
+    ['rejected', 'Verify Rejected'],
+    ['notification', 'Notification'],
+    ['no_notifications', 'No Notifications'],
+    ['schedule', 'Verify Schedule'],
+    ['parameter_rejected', 'Parameter Rejected'],
+    ['derived_parameters', 'Derived Parameters'],
+    ['derived_parameter_dict', 'Derived Param (single)'],
+    ['instruction_detail_check', 'Instruction Detail Check'],
+    ['batch_detail_check', 'Batch Detail Check'],
+  ]},
+  { label: 'Account', items: [
+    ['change_instance_params', 'Change Instance Params'],
+    ['change_template_params', 'Change Template Params'],
+    ['update_account_status', 'Update Account Status'],
+    ['account_close', 'Account Close (pending)'],
+    ['update_account_version', 'Update Account Version'],
+  ]},
+  { label: 'Flags & Misc', items: [
+    ['flag_definition', 'Flag Definition'],
+    ['flag', 'Set Flag'],
+    ['global_param', 'Global Parameter'],
+    ['exception_msg', 'Exception Message'],
+  ]},
 ];
+
+const PALETTE = PALETTE_SECTIONS.flatMap((s) => s.items);
 
 const nodeTypes = {
   custom: SpecCustomNode,
@@ -187,6 +192,56 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [inspectingNodeId, setInspectingNodeId] = useState(null);
   const [insertAfterNodeId, setInsertAfterNodeId] = useState(null);
+
+  const [clipboard, setClipboard] = useState([]);
+  const [paletteSearch, setPaletteSearch] = useState('');
+  const selectedNodes = useMemo(() => nodes.filter((n) => n.selected), [nodes]);
+
+  const copySelected = useCallback(() => {
+    const sel = nodes.filter((n) => n.selected);
+    if (sel.length === 0) return;
+    setClipboard(sel);
+  }, [nodes]);
+
+  const pasteClipboard = useCallback(() => {
+    if (clipboard.length === 0) return;
+    setVisualDirty(true);
+    const OFFSET = 40;
+    const pasted = clipboard.map((n) => ({
+      ...n,
+      id: newId(),
+      position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET },
+      selected: true,
+      data: { ...n.data, _rawData: clone(n.data._rawData) },
+    }));
+    setNodes((nds) => {
+      const all = [...nds.map((n) => ({ ...n, selected: false })), ...pasted];
+      const sorted = [...all].sort((a, b) => {
+        if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
+        return a.position.y - b.position.y;
+      });
+      setEdges(
+        sorted.slice(0, -1).map((n, i) => ({
+          id: `e-${n.id}-${sorted[i + 1].id}`,
+          source: n.id,
+          target: sorted[i + 1].id,
+        })),
+      );
+      return all;
+    });
+  }, [clipboard, setNodes, setEdges]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key === 'c') { e.preventDefault(); copySelected(); }
+      if (mod && e.key === 'v') { e.preventDefault(); pasteClipboard(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [copySelected, pasteClipboard]);
 
   // Derive addresses and account IDs from simulation summary
   const addresses = useMemo(() => {
@@ -474,6 +529,7 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
             </label>
           </>
         )}
+        <div className="spacer" />
         <div className="editor-mode-toggle">
           <button className={`filter${editMode === 'visual' ? ' active' : ''}`} onClick={() => setEditMode('visual')}>Visual</button>
           <button className={`filter${editMode === 'source' ? ' active' : ''}`} onClick={() => setEditMode('source')}>Source</button>
@@ -502,7 +558,25 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
       ) : (
         <>
           <div className="node-editor-body">
-            <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 4 }}>
+            <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 4, display: 'flex', gap: 8 }}>
+              {selectedNodes.length > 0 && (
+                <button
+                  className="filter"
+                  onClick={copySelected}
+                  title={`Copy ${selectedNodes.length} selected node${selectedNodes.length > 1 ? 's' : ''} (⌘C)`}
+                >
+                  Copy{selectedNodes.length > 1 ? ` (${selectedNodes.length})` : ''}
+                </button>
+              )}
+              {clipboard.length > 0 && (
+                <button
+                  className="filter"
+                  onClick={pasteClipboard}
+                  title={`Paste ${clipboard.length} node${clipboard.length > 1 ? 's' : ''} (⌘V)`}
+                >
+                  Paste{clipboard.length > 1 ? ` (${clipboard.length})` : ''}
+                </button>
+              )}
               <button className="primary" onClick={() => { setInsertAfterNodeId(null); setIsPaletteOpen(true); }}>
                 + Add Node
               </button>
@@ -533,16 +607,48 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
           {isPaletteOpen && (
             <Modal
               title={insertAfterNodeId ? 'Insert Node After' : 'Add Node'}
-              onClose={() => { setIsPaletteOpen(false); setInsertAfterNodeId(null); }}
+              onClose={() => { setIsPaletteOpen(false); setInsertAfterNodeId(null); setPaletteSearch(''); }}
+              wide
             >
-              <div className="palette-grid">
-                {PALETTE.map(([type, label]) => (
-                  <button key={type} className="palette-btn" onClick={() => handlePaletteSelect(type)}>
-                    <span className={`node-type type-${type}`}>{type}</span>
-                    <span>{label}</span>
-                  </button>
-                ))}
+              <div className="palette-search">
+                <input
+                  autoFocus
+                  placeholder="Search nodes…"
+                  value={paletteSearch}
+                  onChange={(e) => setPaletteSearch(e.target.value)}
+                />
               </div>
+              {paletteSearch.trim() ? (
+                <div className="palette-grid">
+                  {PALETTE
+                    .filter(([type, label]) => {
+                      const q = paletteSearch.toLowerCase();
+                      return type.includes(q) || label.toLowerCase().includes(q);
+                    })
+                    .map(([type, label]) => (
+                      <button key={type} className="palette-btn" onClick={() => { handlePaletteSelect(type); setPaletteSearch(''); }}>
+                        <span className={`node-type type-${type}`}>{type}</span>
+                        <span>{label}</span>
+                      </button>
+                    ))}
+                </div>
+              ) : (
+                <div className="palette-sections">
+                  {PALETTE_SECTIONS.map((section) => (
+                    <div key={section.label} className="palette-section">
+                      <div className="palette-section-label">{section.label}</div>
+                      <div className="palette-grid">
+                        {section.items.map(([type, label]) => (
+                          <button key={type} className="palette-btn" onClick={() => { handlePaletteSelect(type); setPaletteSearch(''); }}>
+                            <span className={`node-type type-${type}`}>{type}</span>
+                            <span>{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Modal>
           )}
 
@@ -632,7 +738,7 @@ function defaultData(type) {
     settlement: { timestamp: `${day}T10:00:00`, amount: '1000000', client_transaction_id: 'TXN_001', instruction_detail: [] },
     release: { timestamp: `${day}T10:00:00`, client_transaction_id: 'TXN_001', instruction_detail: [] },
     custom_instruction: { timestamp: `${day}T10:00:00`, amount: '1000000', denomination: 'VND', debtor_account_id: '1', debtor_account_address: 'DEFAULT', creditor_account_id: 'LOAN_ACCOUNT', creditor_account_address: 'DEFAULT', instruction_detail: [] },
-    posting_instruction_batch: { timestamp: `${day}T10:00:00`, instructions: [] },
+    posting_instruction_batch: { timestamp: `${day}T10:00:00`, variant: 'initiate', instructions: [] },
     accepted: { timestamp: `${day}T10:00:00`, account_id: 'LOAN_ACCOUNT' },
     rejected: { timestamp: `${day}T10:00:00`, account_id: 'LOAN_ACCOUNT', rejection_type: 'InsufficientFunds', rejection_reason: '' },
     notification: { timestamp: `${day}T10:00:00`, account_id: 'LOAN_ACCOUNT', notification_type: 'ACTIVITY', notification_details: [], expected: true },

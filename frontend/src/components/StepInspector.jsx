@@ -103,7 +103,6 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
           suggestions={{ account_id: accountIds, address: addresses }}
           onAdd={() => addRow('rows', { timestamp: '', account_id: '', address: '', balance: '0' })}
           onChange={(index, key, value) => patchRow('rows', index, key, value)}
-          onBlur={() => sortRows('rows')}
           onRemove={(index) => removeRow('rows', index)}
         />
       </FormGrid>
@@ -122,7 +121,6 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
           suggestions={{ account_id: accountIds, address: addresses }}
           onAdd={() => addRow('rows', { timestamp: '', account_id: '', address: '', denomination: data.denomination || 'VND', phase: 'POSTING_PHASE_COMMITTED', asset: 'COMMERCIAL_BANK_MONEY', balance: '0' })}
           onChange={(index, key, value) => patchRow('rows', index, key, value)}
-          onBlur={() => sortRows('rows')}
           onRemove={(index) => removeRow('rows', index)}
         />
       </FormGrid>
@@ -249,14 +247,138 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
   }
 
   if (node.type === 'posting_instruction_batch') {
+    const variant = data.variant || 'initiate';
+    const instructions = data.instructions || [];
+
+    function patchInstr(idx, key, val) {
+      const updated = clone(instructions);
+      updated[idx] = { ...updated[idx], [key]: val };
+      patch('instructions', updated);
+    }
+
+    function addInstr() {
+      if (variant === 'make') {
+        patch('instructions', [
+          ...instructions,
+          { posting_type: '', instruction_attribute: '', instruction_detail: '', client_transaction_id: '' },
+        ]);
+      } else {
+        patch('instructions', [
+          ...instructions,
+          { instruction_type: 'Transfer', amount: '', denomination: 'VND',
+            creditor_account_id: '', debtor_account_id: '',
+            from_address: '', to_address: '', instruction_details: '' },
+        ]);
+      }
+    }
+
+    function removeInstr(idx) {
+      patch('instructions', instructions.filter((_, i) => i !== idx));
+    }
+
+    function switchVariant(v) {
+      patch('variant', v);
+      patch('instructions', []);
+    }
+
     return (
       <FormGrid>
         <Field label="Timestamp" type="datetime-local" value={data.timestamp} onChange={(v) => patch('timestamp', v)} />
-        {data.instructions?.length > 0 ? (
-          <div className="inspector-text">Contains {data.instructions.length} instructions. Edit in source view.</div>
-        ) : (
-          <div className="inspector-text">No instructions yet.</div>
-        )}
+        <div className="editable-rows">
+          <div className="row-header">
+            <strong>Instructions ({instructions.length})</strong>
+            <div className="pib-variant-toggle">
+              <button type="button" className={variant === 'initiate' ? 'active' : ''} onClick={() => switchVariant('initiate')}>initiate</button>
+              <button type="button" className={variant === 'make' ? 'active' : ''} onClick={() => switchVariant('make')}>make</button>
+            </div>
+            <button type="button" onClick={addInstr}>+ Add</button>
+          </div>
+
+          {variant === 'initiate' ? (
+            <div className="pib-table">
+              <div className="pib-row pib-row-head">
+                <span>Type</span>
+                <span>Amount</span>
+                <span>Denom</span>
+                <span>Creditor account</span>
+                <span>Debtor account</span>
+                <span>From addr</span>
+                <span>To addr</span>
+                <span />
+              </div>
+              {instructions.map((instr, idx) => (
+                <div key={idx} className="pib-instr-group">
+                  <div className="pib-row">
+                    <input value={instr.instruction_type || ''} onChange={(e) => patchInstr(idx, 'instruction_type', e.target.value)} list="pib-dl-type" placeholder="Transfer" />
+                    <input value={instr.amount || ''} onChange={(e) => patchInstr(idx, 'amount', e.target.value)} placeholder="0" />
+                    <input value={instr.denomination || ''} onChange={(e) => patchInstr(idx, 'denomination', e.target.value)} placeholder="VND" />
+                    <input value={instr.creditor_account_id || ''} onChange={(e) => patchInstr(idx, 'creditor_account_id', e.target.value)} list="pib-dl-acct" />
+                    <input value={instr.debtor_account_id || ''} onChange={(e) => patchInstr(idx, 'debtor_account_id', e.target.value)} list="pib-dl-acct" />
+                    <input value={instr.from_address || ''} onChange={(e) => patchInstr(idx, 'from_address', e.target.value)} list="pib-dl-addr" />
+                    <input value={instr.to_address || ''} onChange={(e) => patchInstr(idx, 'to_address', e.target.value)} list="pib-dl-addr" />
+                    <button type="button" className="pib-delete" onClick={() => removeInstr(idx)}>✕</button>
+                  </div>
+                  <div className="pib-details-row">
+                    <textarea
+                      className="pib-details-area"
+                      value={instr.instruction_details || ''}
+                      onChange={(e) => patchInstr(idx, 'instruction_details', e.target.value)}
+                      rows={2}
+                      placeholder='{"repayment_distribution": {...}}'
+                      spellCheck={false}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="pib-table pib-table--make">
+              <div className="pib-row pib-row-head pib-row--make">
+                <span>Posting type</span>
+                <span>Instruction attribute (JSON)</span>
+                <span>Instruction detail (JSON)</span>
+                <span>Client txn ID</span>
+                <span />
+              </div>
+              {instructions.map((instr, idx) => (
+                <div key={idx} className="pib-instr-group">
+                  <div className="pib-row pib-row--make">
+                    <input value={instr.posting_type || ''} onChange={(e) => patchInstr(idx, 'posting_type', e.target.value)} list="pib-dl-posting-type" placeholder="Transfer" />
+                    <textarea className="pib-details-area" value={instr.instruction_attribute || ''} onChange={(e) => patchInstr(idx, 'instruction_attribute', e.target.value)} rows={2} placeholder='{"amount": "1000", "denomination": "VND", ...}' spellCheck={false} />
+                    <textarea className="pib-details-area" value={instr.instruction_detail || ''} onChange={(e) => patchInstr(idx, 'instruction_detail', e.target.value)} rows={2} placeholder='{"transaction_code": "..."}' spellCheck={false} />
+                    <input value={instr.client_transaction_id || ''} onChange={(e) => patchInstr(idx, 'client_transaction_id', e.target.value)} placeholder="1" />
+                    <button type="button" className="pib-delete" onClick={() => removeInstr(idx)}>✕</button>
+                  </div>
+                </div>
+              ))}
+              <datalist id="pib-dl-posting-type">
+                <option value="Transfer" />
+                <option value="Settlement" />
+                <option value="Release" />
+                <option value="InboundAuthorisation" />
+                <option value="OutboundAuthorisation" />
+                <option value="CustomInstruction" />
+                <option value="InboundHardSettlement" />
+                <option value="OutboundHardSettlement" />
+              </datalist>
+            </div>
+          )}
+
+          <datalist id="pib-dl-type">
+            <option value="Transfer" />
+            <option value="InboundHardSettlement" />
+            <option value="OutboundHardSettlement" />
+            <option value="InboundAuthorisation" />
+            <option value="OutboundAuthorisation" />
+            <option value="CustomInstruction" />
+          </datalist>
+          <datalist id="pib-dl-acct">
+            {accountIds.map((s) => <option key={s} value={s} />)}
+          </datalist>
+          <datalist id="pib-dl-addr">
+            {addresses.map((s) => <option key={s} value={s} />)}
+          </datalist>
+        </div>
       </FormGrid>
     );
   }
@@ -540,7 +662,7 @@ function Field({ label, value = '', onChange, type = 'text' }) {
   return (
     <label>
       {label}
-      <input type={type} value={value || ''} onChange={(e) => onChange(e.target.value)} />
+      <input type={type} step={type === 'datetime-local' ? '1' : undefined} value={value || ''} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
@@ -583,6 +705,7 @@ function EditableRows({ title, rows, columns, inputTypes = {}, suggestions = {},
                   <span key={col} style={{ display: 'contents' }}>
                     <input
                       type={inputTypes[col] || 'text'}
+                      step={inputTypes[col] === 'datetime-local' ? '1' : undefined}
                       value={row[col] || ''}
                       onChange={(e) => onChange(index, col, e.target.value)}
                       onBlur={onBlur}

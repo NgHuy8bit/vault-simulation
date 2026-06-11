@@ -8,10 +8,11 @@
 #
 # ┌──────────────────────────────────────────────────────────────────────┐
 # │  FIRST BUILD (or after dependency changes):                          │
-# │    GITHUB_TOKEN=ghp_xxx docker compose build viewer-runner           │
+# │    docker compose build viewer-runner                                │
 # │                                                                      │
-# │  The token is passed as a BuildKit secret — it is NEVER stored in    │
-# │  any image layer or visible in `docker history`.                     │
+# │  Uses SSH agent forwarding (--mount=type=ssh) so private GitHub      │
+# │  packages are cloned using your host SSH key — no token needed.      │
+# │  Requires ssh-agent running with your key: ssh-add ~/.ssh/id_ed25519 │
 # │                                                                      │
 # │  Subsequent `docker compose up` starts in ~3 seconds (no downloads). │
 # └──────────────────────────────────────────────────────────────────────┘
@@ -57,8 +58,9 @@ RUN --mount=type=secret,id=github_token,uid=1000 \
     bash -c ' \
       TOKEN=$(cat /run/secrets/github_token 2>/dev/null || true); \
       if [ -z "$TOKEN" ]; then \
-        echo "ERROR: GITHUB_TOKEN secret is required to clone private dependencies."; \
-        echo "  Run: GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner"; \
+        echo "ERROR: GITHUB_TOKEN secret is missing."; \
+        echo "  Use: make docker-build  (auto-extracts token from macOS Keychain)"; \
+        echo "  Or:  GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner"; \
         exit 1; \
       fi; \
       git config --global credential.helper store; \

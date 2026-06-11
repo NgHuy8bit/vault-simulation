@@ -13,12 +13,19 @@ PYTHON_BIN := $(VENV)/bin/python
 UVICORN := $(VENV)/bin/uvicorn
 FRONTEND_STAMP := frontend/.deps-stamp
 
-.PHONY: help setup setup-be setup-fe run run-be run-be-dev run-fe dev build test clean legacy
+.PHONY: help setup setup-be setup-fe run run-be run-be-dev run-fe dev build test clean legacy \
+        docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Simulation Viewer"
 	@echo ""
-	@echo "Targets:"
+	@echo "Docker targets (recommended):"
+	@echo "  make docker-build  Build viewer-runner image (auto-grabs GitHub token from Keychain)"
+	@echo "  make docker-up     Build + start all containers"
+	@echo "  make docker-down   Stop and remove containers"
+	@echo "  make docker-logs   Tail container logs"
+	@echo ""
+	@echo "Local dev targets:"
 	@echo "  make setup       Create backend .venv and install frontend deps"
 	@echo "  make run-be      Run FastAPI backend on BACKEND_PORT=$(BACKEND_PORT)"
 	@echo "  make run-be-dev  Run FastAPI backend with reload"
@@ -27,11 +34,10 @@ help:
 	@echo "  make build       Build frontend"
 	@echo "  make test        Compile backend and build frontend"
 	@echo "  make clean       Remove local build/dependency artifacts"
-	@echo "  make legacy      Run old stdlib viewer"
 	@echo ""
 	@echo "Examples:"
+	@echo "  make docker-up"
 	@echo "  make dev"
-	@echo "  BACKEND_PORT=8001 FRONTEND_PORT=5174 make dev"
 
 setup: setup-be setup-fe
 
@@ -75,6 +81,31 @@ test: setup
 
 legacy:
 	$(PYTHON) server.py
+
+# ── Docker targets ────────────────────────────────────────────────────────────
+# Auto-extracts GITHUB_TOKEN from macOS Keychain via git credential helper.
+# No need to set any env var — just make sure you're already authenticated
+# with GitHub (i.e. `git clone https://github.com/GalaxyFinX/...` works).
+
+docker-build:
+	@token=$$(printf 'protocol=https\nhost=github.com\n' | git credential fill 2>/dev/null | awk -F= '/^password/{print $$2}'); \
+	if [ -z "$$token" ]; then \
+		echo "ERROR: Could not get GitHub token from macOS Keychain."; \
+		echo "       Make sure you are authenticated: git ls-remote https://github.com/GalaxyFinX/smart-contracts.git"; \
+		exit 1; \
+	fi; \
+	echo "Using GitHub token from Keychain ($(shell printf 'protocol=https\nhost=github.com\n' | git credential fill 2>/dev/null | awk -F= '/^username/{print $$2}'))"; \
+	GITHUB_TOKEN=$$token docker compose build viewer-runner
+
+docker-up:
+	@$(MAKE) docker-build
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f
 
 clean:
 	rm -rf $(VENV) frontend/node_modules frontend/dist $(FRONTEND_STAMP)

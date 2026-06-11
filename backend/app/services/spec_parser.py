@@ -574,8 +574,11 @@ def _parse_custom_instruction(text: str, table: list[dict[str, str]]) -> dict[st
 # ── Posting Instruction Batch ─────────────────────────────────────────────────
 
 def _parse_posting_instruction_batch(text: str, table: list[dict[str, str]]) -> dict[str, Any]:
+    lowered = text.lower()
+    variant = "initiate" if re.search(r"initiate an? instruction batch", lowered) else "make"
     return {
         "timestamp": _first(r'At "([^"]+)"', text),
+        "variant": variant,
         "instructions": table,
         "raw_text": text,
     }
