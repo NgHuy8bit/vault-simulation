@@ -1,4 +1,4 @@
-import { Handle, Position } from '@xyflow/react';
+import { Handle, Position, useNodeConnections } from '@xyflow/react';
 
 // Type → accent color class (left border strip + badge tint)
 const TYPE_ACCENT = {
@@ -263,6 +263,14 @@ export function SpecCustomNode({ data, isConnectable }) {
   const isAnnotation = data.type === 'other';
   const runStatusClass = data.runStatus ? `run-status-${data.runStatus}` : '';
   const accentClass = TYPE_ACCENT[data.type] || 'accent-config';
+  // In the editor (isConnectable), highlight handles that have no wire yet so
+  // it's obvious where to drag from. A step has at most one wire per side —
+  // connecting onto an occupied side replaces the existing wire (see
+  // onConnect in SpecNodeEditor).
+  const inConnections = useNodeConnections({ handleType: 'target' });
+  const outConnections = useNodeConnections({ handleType: 'source' });
+  const inOpen = isConnectable && inConnections.length === 0;
+  const outOpen = isConnectable && outConnections.length === 0;
   const statusLabel = data.runStatus === 'running'
     ? 'Running'
     : data.runStatus === 'passed'
@@ -277,7 +285,8 @@ export function SpecCustomNode({ data, isConnectable }) {
         type="target"
         position={Position.Left}
         isConnectable={isConnectable}
-        style={{ background: '#475569', width: 8, height: 8 }}
+        className={inOpen ? 'handle-open' : ''}
+        style={inOpen ? undefined : { background: '#475569', width: 8, height: 8 }}
       />
 
       <div className="node-content">
@@ -321,7 +330,8 @@ export function SpecCustomNode({ data, isConnectable }) {
         type="source"
         position={Position.Right}
         isConnectable={isConnectable}
-        style={{ background: '#475569', width: 8, height: 8 }}
+        className={outOpen ? 'handle-open' : ''}
+        style={outOpen ? undefined : { background: '#475569', width: 8, height: 8 }}
       />
     </div>
   );

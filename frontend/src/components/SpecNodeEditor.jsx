@@ -118,13 +118,50 @@ function _spliceScenarioIntoContent(fullContent, startIdx, endIdx, newScenarioTe
   ].join('\n');
 }
 
-// Build the full steps_json payload after a single-scenario visual edit, by
-// merging the edited scenario back into the original parsed spec structure.
-function _buildScenarioStepsJson(nodes, scenarioName, scenarioTags, spec, scenarioIndex) {
-  const sortedNodes = [...nodes].sort((a, b) => {
+// Order nodes by walking the edge chain (source → target). Step order is
+// defined by the connections the user draws, not node positions. Heads
+// (nodes with no incoming edge) are visited in position order; any nodes
+// unreachable through edges are appended at the end, also by position.
+function _orderByEdges(nodes, edges) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const outgoing = new Map();
+  const hasIncoming = new Set();
+  for (const e of edges) {
+    if (!byId.has(e.source) || !byId.has(e.target)) continue;
+    if (!outgoing.has(e.source)) outgoing.set(e.source, []);
+    outgoing.get(e.source).push(e.target);
+    hasIncoming.add(e.target);
+  }
+  const posSort = (a, b) => {
     if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
     return a.position.y - b.position.y;
-  });
+  };
+  const heads = nodes.filter((n) => !hasIncoming.has(n.id)).sort(posSort);
+  const visited = new Set();
+  const ordered = [];
+  for (const head of heads) {
+    let queue = [head.id];
+    while (queue.length) {
+      const id = queue.shift();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      ordered.push(byId.get(id));
+      const next = (outgoing.get(id) || [])
+        .filter((t) => !visited.has(t))
+        .map((t) => byId.get(t))
+        .sort(posSort)
+        .map((n) => n.id);
+      queue = [...next, ...queue];
+    }
+  }
+  const leftovers = nodes.filter((n) => !visited.has(n.id)).sort(posSort);
+  return [...ordered, ...leftovers];
+}
+
+// Build the full steps_json payload after a single-scenario visual edit, by
+// merging the edited scenario back into the original parsed spec structure.
+function _buildScenarioStepsJson(nodes, edges, scenarioName, scenarioTags, spec, scenarioIndex) {
+  const sortedNodes = _orderByEdges(nodes, edges);
 
   const stepNodes = sortedNodes.filter((n) => n.data.type !== 'scenario');
   const editedScenario = {
@@ -214,21 +251,23 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
       selected: true,
       data: { ...n.data, _rawData: clone(n.data._rawData) },
     }));
-    setNodes((nds) => {
-      const all = [...nds.map((n) => ({ ...n, selected: false })), ...pasted];
-      const sorted = [...all].sort((a, b) => {
+    setNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), ...pasted]);
+    // Chain pasted nodes together (in their relative order); existing edges
+    // are untouched — connect the pasted block into the flow by hand.
+    if (pasted.length > 1) {
+      const sorted = [...pasted].sort((a, b) => {
         if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
         return a.position.y - b.position.y;
       });
-      setEdges(
-        sorted.slice(0, -1).map((n, i) => ({
+      setEdges((eds) => [
+        ...eds,
+        ...sorted.slice(0, -1).map((n, i) => ({
           id: `e-${n.id}-${sorted[i + 1].id}`,
           source: n.id,
           target: sorted[i + 1].id,
         })),
-      );
-      return all;
-    });
+      ]);
+    }
   }, [clipboard, setNodes, setEdges]);
 
   useEffect(() => {
@@ -238,10 +277,19 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === 'c') { e.preventDefault(); copySelected(); }
       if (mod && e.key === 'v') { e.preventDefault(); pasteClipboard(); }
+      // Delete/Backspace removes selected EDGES only (nodes have their own
+      // explicit Delete button in the inspector to avoid accidents).
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        setEdges((eds) => {
+          if (!eds.some((edge) => edge.selected)) return eds;
+          setVisualDirty(true);
+          return eds.filter((edge) => !edge.selected);
+        });
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [copySelected, pasteClipboard]);
+  }, [copySelected, pasteClipboard, setEdges]);
 
   // Derive addresses and account IDs from simulation summary
   const addresses = useMemo(() => {
@@ -267,8 +315,26 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
     [setEdges],
   );
 
+  // Manual edge wiring: a step has at most one predecessor and one successor,
+  // so a new connection replaces any existing edge from the same source or
+  // into the same target. This makes "re-linking" a one-drag operation.
   const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge(params, eds)),
+    (params) => {
+      if (params.source === params.target) return;
+      setVisualDirty(true);
+      setEdges((eds) =>
+        addEdge(params, eds.filter((e) => e.source !== params.source && e.target !== params.target)),
+      );
+    },
+    [setEdges],
+  );
+
+  const onEdgeDoubleClick = useCallback(
+    (event, edge) => {
+      event.stopPropagation();
+      setVisualDirty(true);
+      setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+    },
     [setEdges],
   );
 
@@ -276,24 +342,10 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
     setInspectingNodeId(node.id);
   }, []);
 
-  // After dragging, recompute edges to match new visual order
+  // Dragging only moves nodes — edges stay as the user wired them.
   const onNodeDragStop = useCallback(() => {
     setVisualDirty(true);
-    setNodes((nds) => {
-      const sorted = [...nds].sort((a, b) => {
-        if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
-        return a.position.y - b.position.y;
-      });
-      setEdges(
-        sorted.slice(0, -1).map((n, i) => ({
-          id: `e-${n.id}-${sorted[i + 1].id}`,
-          source: n.id,
-          target: sorted[i + 1].id,
-        })),
-      );
-      return nds;
-    });
-  }, [setEdges]);
+  }, []);
 
   function addNode(type) {
     setVisualDirty(true);
@@ -327,8 +379,11 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
     setNodes((nds) => [...nds, newNode]);
 
     if (nodes.length > 0) {
-      const lastNodeId = nodes[nodes.length - 1].id;
-      setEdges((eds) => [...eds, { id: `e-${lastNodeId}-${id}`, source: lastNodeId, target: id }]);
+      // Append to the tail of the edge chain (last node in walk order).
+      const tail = _orderByEdges(nodes, edges).at(-1);
+      if (tail) {
+        setEdges((eds) => [...eds, { id: `e-${tail.id}-${id}`, source: tail.id, target: id }]);
+      }
     }
 
     setIsPaletteOpen(false);
@@ -442,7 +497,7 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
           await api.saveSpec({ path: spec.path, raw_content: newContent });
         } else {
           const stepsJson = _buildScenarioStepsJson(
-            nodes, scenarioName, scenarioTags, spec, scenarioIndex,
+            nodes, edges, scenarioName, scenarioTags, spec, scenarioIndex,
           );
           await api.saveSpec({ path: spec.path, steps_json: stepsJson });
         }
@@ -464,7 +519,7 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
         } else if (!visualDirty) {
           await api.saveSpec({ path, raw_content: spec.content || '' });
         } else {
-          await api.saveSpec({ path, steps_json: flowToSpec(nodes, title, fileTags) });
+          await api.saveSpec({ path, steps_json: flowToSpec(nodes, edges, title, fileTags) });
         }
       }
 
@@ -559,6 +614,7 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
         <>
           <div className="node-editor-body">
             <div className="canvas-action-bar">
+              <span className="edge-hint">Drag handle ○→○ to connect · double-click edge to disconnect</span>
               {selectedNodes.length > 0 && (
                 <button
                   className="filter toolbar-ghost"
@@ -588,11 +644,14 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onEdgeDoubleClick={onEdgeDoubleClick}
               onNodeClick={onNodeClick}
               onNodeDragStop={onNodeDragStop}
               onSelectionDragStop={onNodeDragStop}
               nodeTypes={nodeTypes}
               deleteKeyCode={null}
+              edgesFocusable
+              connectionRadius={40}
               selectionOnDrag
               panOnDrag={[2]}
               panOnScroll
@@ -682,14 +741,11 @@ export function SpecNodeEditor({ spec, summary, scenarioIndex, onCancel, onSaved
 
 // ── flowToSpec: full-spec visual → steps_json ─────────────────────────────────
 
-function flowToSpec(nodes, title, fileTags) {
+function flowToSpec(nodes, edges, title, fileTags) {
   const setup_steps = [];
   const scenarios = [];
 
-  const sortedNodes = [...nodes].sort((a, b) => {
-    if (Math.abs(a.position.y - b.position.y) < 50) return a.position.x - b.position.x;
-    return a.position.y - b.position.y;
-  });
+  const sortedNodes = _orderByEdges(nodes, edges);
 
   let currentScenario = null;
   for (const node of sortedNodes) {

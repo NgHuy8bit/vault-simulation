@@ -276,9 +276,22 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
       patch('instructions', instructions.filter((_, i) => i !== idx));
     }
 
+    function duplicateInstr(idx) {
+      const copy = clone(instructions[idx]);
+      const updated = [...instructions];
+      updated.splice(idx + 1, 0, copy);
+      patch('instructions', updated);
+    }
+
     function switchVariant(v) {
       patch('variant', v);
       patch('instructions', []);
+    }
+
+    function jsonOk(text) {
+      const t = (text || '').trim();
+      if (!t) return true;
+      try { JSON.parse(t); return true; } catch { return false; }
     }
 
     return (
@@ -296,40 +309,59 @@ export function StepInspector({ node, onChange, addresses = [], accountIds = [] 
 
           {variant === 'initiate' ? (
             <div className="pib-table">
-              <div className="pib-row pib-row-head">
-                <span>Type</span>
-                <span>Amount</span>
-                <span>Denom</span>
-                <span>Creditor account</span>
-                <span>Debtor account</span>
-                <span>From addr</span>
-                <span>To addr</span>
-                <span />
-              </div>
-              {instructions.map((instr, idx) => (
-                <div key={idx} className="pib-instr-group">
-                  <div className="pib-row">
-                    <input value={instr.instruction_type || ''} onChange={(e) => patchInstr(idx, 'instruction_type', e.target.value)} list="pib-dl-type" placeholder="Transfer" />
-                    <input value={instr.amount || ''} onChange={(e) => patchInstr(idx, 'amount', e.target.value)} placeholder="0" />
-                    <input value={instr.denomination || ''} onChange={(e) => patchInstr(idx, 'denomination', e.target.value)} placeholder="VND" />
-                    <input value={instr.creditor_account_id || ''} onChange={(e) => patchInstr(idx, 'creditor_account_id', e.target.value)} list="pib-dl-acct" />
-                    <input value={instr.debtor_account_id || ''} onChange={(e) => patchInstr(idx, 'debtor_account_id', e.target.value)} list="pib-dl-acct" />
-                    <input value={instr.from_address || ''} onChange={(e) => patchInstr(idx, 'from_address', e.target.value)} list="pib-dl-addr" />
-                    <input value={instr.to_address || ''} onChange={(e) => patchInstr(idx, 'to_address', e.target.value)} list="pib-dl-addr" />
-                    <button type="button" className="pib-delete" onClick={() => removeInstr(idx)}>✕</button>
+              {instructions.map((instr, idx) => {
+                const detailsOk = jsonOk(instr.instruction_details);
+                const summaryBits = [
+                  instr.instruction_type || '—',
+                  `${instr.amount || '0'} ${instr.denomination || ''}`.trim(),
+                  instr.creditor_account_id && `→ ${instr.creditor_account_id}`,
+                ].filter(Boolean);
+                return (
+                  <div key={idx} className="pib-instr-card">
+                    <div className="pib-instr-card-head">
+                      <span className="pib-instr-num">#{idx + 1}</span>
+                      <span className="pib-instr-summary">{summaryBits.join(' · ')}</span>
+                      <button type="button" className="pib-mini-btn" title="Duplicate instruction" onClick={() => duplicateInstr(idx)}>⧉</button>
+                      <button type="button" className="pib-mini-btn danger" title="Remove instruction" onClick={() => removeInstr(idx)}>✕</button>
+                    </div>
+                    <div className="pib-row pib-row-labels">
+                      <span>Type</span>
+                      <span>Amount</span>
+                      <span>Denom</span>
+                      <span>Creditor account</span>
+                      <span>Debtor account</span>
+                      <span>From addr</span>
+                      <span>To addr</span>
+                    </div>
+                    <div className="pib-row">
+                      <input value={instr.instruction_type || ''} onChange={(e) => patchInstr(idx, 'instruction_type', e.target.value)} list="pib-dl-type" placeholder="Transfer" />
+                      <input value={instr.amount || ''} onChange={(e) => patchInstr(idx, 'amount', e.target.value)} placeholder="0" />
+                      <input value={instr.denomination || ''} onChange={(e) => patchInstr(idx, 'denomination', e.target.value)} placeholder="VND" />
+                      <input value={instr.creditor_account_id || ''} onChange={(e) => patchInstr(idx, 'creditor_account_id', e.target.value)} list="pib-dl-acct" />
+                      <input value={instr.debtor_account_id || ''} onChange={(e) => patchInstr(idx, 'debtor_account_id', e.target.value)} list="pib-dl-acct" />
+                      <input value={instr.from_address || ''} onChange={(e) => patchInstr(idx, 'from_address', e.target.value)} list="pib-dl-addr" />
+                      <input value={instr.to_address || ''} onChange={(e) => patchInstr(idx, 'to_address', e.target.value)} list="pib-dl-addr" />
+                    </div>
+                    <div className="pib-details-row">
+                      <span className="pib-details-label">
+                        instruction_details
+                        {!detailsOk && <span className="pib-json-hint">· invalid JSON</span>}
+                      </span>
+                      <textarea
+                        className={`pib-details-area ${detailsOk ? '' : 'invalid'}`}
+                        value={instr.instruction_details || ''}
+                        onChange={(e) => patchInstr(idx, 'instruction_details', e.target.value)}
+                        rows={2}
+                        placeholder='{"repayment_distribution": {...}}'
+                        spellCheck={false}
+                      />
+                    </div>
                   </div>
-                  <div className="pib-details-row">
-                    <textarea
-                      className="pib-details-area"
-                      value={instr.instruction_details || ''}
-                      onChange={(e) => patchInstr(idx, 'instruction_details', e.target.value)}
-                      rows={2}
-                      placeholder='{"repayment_distribution": {...}}'
-                      spellCheck={false}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
+              {instructions.length === 0 && (
+                <div className="pib-empty-hint">No instructions yet — click “+ Add”.</div>
+              )}
             </div>
           ) : (
             <div className="pib-table pib-table--make">
