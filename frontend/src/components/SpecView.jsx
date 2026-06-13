@@ -91,11 +91,28 @@ function findStepLine(stepLines, stepText) {
 
 // ── Run output overlay ────────────────────────────────────────────────────
 
+function fmtDuration(ms) {
+  if (ms == null) return null;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function RunOutputPanel({ lines, status, progress, result, specPath, specScenarios, stepLines, onJumpToLine, onClose, onCollapse }) {
   const bodyRef = useRef(null);
   const logRef = useRef(null);
   const [showLog, setShowLog] = useState(false);
   const parsed = useMemo(() => parseGaugeOutput(lines), [lines]);
+
+  const scenarioDurations = useMemo(() => {
+    if (!result?.specs) return {};
+    const map = {};
+    for (const spec of result.specs) {
+      for (const sc of spec.scenarios) {
+        map[sc.heading] = sc.duration_ms;
+      }
+    }
+    return map;
+  }, [result]);
 
   // Auto-open raw log when test fails
   useEffect(() => {
@@ -196,6 +213,9 @@ function RunOutputPanel({ lines, status, progress, result, specPath, specScenari
                       <span key={s.passed + j} className="step-tick fail" style={{ animationDelay: `${(s.passed + j) * 55}ms` }}>✗</span>
                     ))}
                   </span>
+                  {scenarioDurations[s.name] != null && (
+                    <span className="run-scenario-duration muted">{fmtDuration(scenarioDurations[s.name])}</span>
+                  )}
                 </div>
               );
             })}
@@ -206,11 +226,13 @@ function RunOutputPanel({ lines, status, progress, result, specPath, specScenari
               </div>
             )}
           </div>
-          {(parsed.summary || parsed.timing) && (
+          {(parsed.summary || parsed.timing || result?.total_duration_ms != null) && (
             <div className="run-summary-line">
               {parsed.summary && <span>{parsed.summary}</span>}
               {parsed.scenariosSummary && <span>{parsed.scenariosSummary}</span>}
-              {parsed.timing && <span className="muted">⏱ {parsed.timing}</span>}
+              {result?.total_duration_ms != null
+                ? <span className="muted">⏱ {fmtDuration(result.total_duration_ms)}</span>
+                : parsed.timing && <span className="muted">⏱ {parsed.timing}</span>}
             </div>
           )}
 

@@ -14,7 +14,7 @@ UVICORN := $(VENV)/bin/uvicorn
 FRONTEND_STAMP := frontend/.deps-stamp
 
 .PHONY: help setup setup-be setup-fe run run-be run-be-dev run-fe dev build test clean legacy \
-        docker-build docker-up docker-down docker-logs
+        gen-product-defaults docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Simulation Viewer"
@@ -82,6 +82,9 @@ test: setup
 legacy:
 	$(PYTHON) server.py
 
+gen-product-defaults:
+	docker compose exec -T viewer-runner bash -lc 'cd /workspaces/smart-contracts && DEVELOPMENT_MODE=1 PYTHONPATH=. /opt/sc-venv/bin/python /opt/viewer-backend-go-src/tools/gen_product_defaults.py'
+
 # ── Docker targets ────────────────────────────────────────────────────────────
 # Auto-extracts GITHUB_TOKEN from macOS Keychain via git credential helper.
 # No need to set any env var — just make sure you're already authenticated
@@ -94,8 +97,13 @@ docker-build:
 		echo "       Make sure you are authenticated: git ls-remote https://github.com/GalaxyFinX/smart-contracts.git"; \
 		exit 1; \
 	fi; \
+	tmp_secret=$$(mktemp); \
+	printf '%s' "$$token" > "$$tmp_secret"; \
 	echo "Using GitHub token from Keychain ($(shell printf 'protocol=https\nhost=github.com\n' | git credential fill 2>/dev/null | awk -F= '/^username/{print $$2}'))"; \
-	GITHUB_TOKEN=$$token docker compose build viewer-runner
+	GITHUB_TOKEN_FILE=$$tmp_secret docker compose build viewer-runner; \
+	status=$$?; \
+	rm -f "$$tmp_secret"; \
+	exit $$status
 
 docker-up:
 	@$(MAKE) docker-build

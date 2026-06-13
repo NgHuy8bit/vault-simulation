@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.4
+# syntax=docker/dockerfile:1
 #
 # Dedicated runner image for the Vault Simulation Viewer.
 #
@@ -10,12 +10,18 @@
 # │  FIRST BUILD (or after dependency changes):                          │
 # │    docker compose build viewer-runner                                │
 # │                                                                      │
-# │  Uses SSH agent forwarding (--mount=type=ssh) so private GitHub      │
-# │  packages are cloned using your host SSH key — no token needed.      │
-# │  Requires ssh-agent running with your key: ssh-add ~/.ssh/id_ed25519 │
+# │  Uses runner/.env as a BuildKit secret so private GitHub packages    │
+# │  can be installed without baking the token into the image.           │
 # │                                                                      │
 # │  Subsequent `docker compose up` starts in ~3 seconds (no downloads). │
 # └──────────────────────────────────────────────────────────────────────┘
+
+FROM golang:1.23-bookworm AS viewer-go-builder
+
+WORKDIR /src/simulation-viewer/backend-go
+COPY simulation-viewer/backend-go/go.mod ./
+COPY simulation-viewer/backend-go/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/viewer ./cmd/viewer
 
 FROM mcr.microsoft.com/devcontainers/base:bookworm
 
@@ -29,10 +35,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Pre-create /opt dirs as root so the non-root vscode user can write to them.
-# The venv paths must exist before uv tries to create them (uv can populate
-# an existing dir but cannot create parent dirs it doesn't own).
-RUN mkdir -p /opt/sc-venv /opt/viewer-backend-venv \
-    && chown vscode:vscode /opt/sc-venv /opt/viewer-backend-venv
+# The smart-contracts venv path must exist before uv tries to create it.
+RUN mkdir -p /opt/sc-venv /opt/viewer-backend-go \
+    && touch /opt/viewer-settings.json \
+    && chown vscode:vscode /opt/sc-venv /opt/viewer-backend-go /opt/viewer-settings.json
+
+COPY --from=viewer-go-builder --chown=vscode:vscode /out/viewer /opt/viewer-backend-go/viewer
 
 USER vscode
 ENV PATH="/home/vscode/.local/bin:/home/vscode/.bun/bin:${PATH}"
@@ -56,11 +64,18 @@ COPY --chown=vscode smart-contracts/pyproject.toml smart-contracts/uv.lock /tmp/
 # the non-root vscode user would get a permission-denied reading it.
 RUN --mount=type=secret,id=github_token,uid=1000 \
     bash -c ' \
-      TOKEN=$(cat /run/secrets/github_token 2>/dev/null || true); \
+      TOKEN_SECRET=$(cat /run/secrets/github_token 2>/dev/null || true); \
+      TOKEN="$TOKEN_SECRET"; \
+      if printf "%s\n" "$TOKEN_SECRET" | grep -q "^GITHUB_TOKEN="; then \
+        TOKEN=$(printf "%s\n" "$TOKEN_SECRET" | sed -n "s/^GITHUB_TOKEN=//p" | head -n 1); \
+      fi; \
+      TOKEN="${TOKEN%$'\''\r'\''}"; \
+      TOKEN="${TOKEN#\"}"; TOKEN="${TOKEN%\"}"; \
+      TOKEN="${TOKEN#'\''}"; TOKEN="${TOKEN%'\''}"; \
       if [ -z "$TOKEN" ]; then \
         echo "ERROR: GITHUB_TOKEN secret is missing."; \
-        echo "  Use: make docker-build  (auto-extracts token from macOS Keychain)"; \
-        echo "  Or:  GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner"; \
+        echo "  Add GITHUB_TOKEN=... to simulation-viewer/runner/.env"; \
+        echo "  Or run with GITHUB_TOKEN_FILE=/path/to/token-file docker compose build viewer-runner"; \
         exit 1; \
       fi; \
       git config --global credential.helper store; \
@@ -86,15 +101,6 @@ RUN bun install --frozen-lockfile 2>/dev/null || bun install
 # gauge Python plugin goes to ~/.gauge/plugins/ — baked into the image so
 # the entrypoint never needs to download it.
 RUN bunx gauge install python
-
-# ── Pre-install viewer backend Python dependencies ────────────────────────────
-# The backend source is bind-mounted at /opt/viewer-backend at runtime.
-# The venv lives at /opt/viewer-backend-venv (outside the mount point) so
-# it is never shadowed when the bind-mount is applied.
-COPY --chown=vscode simulation-viewer/backend/requirements.txt /tmp/backend-deps/
-RUN uv venv /opt/viewer-backend-venv --python 3.11 && \
-    . /opt/viewer-backend-venv/bin/activate && \
-    uv pip install -q -r /tmp/backend-deps/requirements.txt
 
 # ── Runtime defaults ──────────────────────────────────────────────────────────
 WORKDIR /workspaces/smart-contracts

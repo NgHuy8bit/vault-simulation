@@ -9,7 +9,7 @@
 #   2. bun install              — creates node_modules in the bind-mount (~100 ms,
 #                                  bun's package cache is pre-warmed in the image)
 #   3. sitecustomize.py symlink — must point into the live smart-contracts tree
-#   4. Start uvicorn
+#   4. Start the Go backend
 set -euo pipefail
 
 export PATH="/home/vscode/.local/bin:/home/vscode/.bun/bin:${PATH}"
@@ -17,8 +17,9 @@ export UV_PROJECT_ENVIRONMENT="/opt/sc-venv"
 export GAUGE_PYTHON_COMMAND="/opt/sc-venv/bin/python"
 
 SC_DIR="/workspaces/smart-contracts"
-VIEWER_BACKEND_DIR="/opt/viewer-backend"
-VIEWER_BACKEND_VENV="/opt/viewer-backend-venv"   # pre-built in Docker image
+VIEWER_BACKEND_BIN="/opt/viewer-backend-go/viewer"
+export VIEWER_DIR="/opt"
+export SMART_CONTRACTS_DIR="$SC_DIR"
 
 # ── 1. Git credentials for any runtime git operations ──────────────────────
 if [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -45,8 +46,5 @@ SITE_PACKAGES="$(uv run python -c 'import site; print(site.getsitepackages()[0])
 ln -sf "${SC_DIR}/config/sitecustomize.py" "${SITE_PACKAGES}/sitecustomize.py"
 
 # ── 4. Start backend ────────────────────────────────────────────────────────
-cd "$VIEWER_BACKEND_DIR"
-# shellcheck disable=SC1091
-source "${VIEWER_BACKEND_VENV}/bin/activate"
-echo "==> Starting uvicorn on 0.0.0.0:8000…"
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+echo "==> Starting Go viewer backend on 0.0.0.0:8000…"
+exec "$VIEWER_BACKEND_BIN"

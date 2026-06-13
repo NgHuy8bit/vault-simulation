@@ -16,6 +16,9 @@ export function SettingsPanel({ onClose }) {
   const [containerWorkdir, setContainerWorkdir] = useState('');
   const [bunxPath, setBunxPath] = useState('');
   const [smartContractsDir, setSmartContractsDir] = useState('');
+  const [runMode, setRunMode] = useState('native');
+  const [simConcurrency, setSimConcurrency] = useState('4');
+  const [simEnvironment, setSimEnvironment] = useState('');
 
   useEffect(() => {
     api.getSettings().then(({ settings: s, defaults: d }) => {
@@ -25,6 +28,9 @@ export function SettingsPanel({ onClose }) {
       setContainerWorkdir(s.container_workdir ?? '');
       setBunxPath(s.bunx_path ?? '');
       setSmartContractsDir(s.smart_contracts_dir ?? '');
+      setRunMode(s.run_mode ?? 'native');
+      setSimConcurrency(s.sim_concurrency ?? '4');
+      setSimEnvironment(s.sim_environment ?? '');
     });
     firstInputRef.current?.focus();
   }, []);
@@ -50,6 +56,9 @@ export function SettingsPanel({ onClose }) {
         container_workdir: containerWorkdir,
         bunx_path: bunxPath,
         smart_contracts_dir: smartContractsDir,
+        run_mode: runMode,
+        sim_concurrency: simConcurrency,
+        sim_environment: simEnvironment,
       });
       setSettings(updated);
       setToast({ type: 'success', message: 'Settings saved.' });
@@ -71,6 +80,9 @@ export function SettingsPanel({ onClose }) {
       setContainerWorkdir(updated.container_workdir ?? '');
       setBunxPath(updated.bunx_path ?? '');
       setSmartContractsDir(updated.smart_contracts_dir ?? '');
+      setRunMode(updated.run_mode ?? 'native');
+      setSimConcurrency(updated.sim_concurrency ?? '4');
+      setSimEnvironment(updated.sim_environment ?? '');
       setToast({ type: 'success', message: 'Reset to defaults.' });
     } catch (err) {
       setToast({ type: 'error', message: err.message });
@@ -95,11 +107,47 @@ export function SettingsPanel({ onClose }) {
             <div className={`settings-toast settings-toast--${toast.type}`}>{toast.message}</div>
           )}
 
+          <section className="settings-section">
+            <h3 className="settings-section-title">Simulation engine</h3>
+
+            <label className="settings-label">
+              run mode
+              <select
+                className="settings-input"
+                value={runMode}
+                onChange={(e) => setRunMode(e.target.value)}
+              >
+                <option value="native">native Go</option>
+                <option value="gauge">Gauge fallback</option>
+              </select>
+            </label>
+
+            <label className="settings-label">
+              native concurrency
+              <input
+                className="settings-input"
+                value={simConcurrency}
+                onChange={(e) => setSimConcurrency(e.target.value)}
+                placeholder={placeholder('sim_concurrency')}
+              />
+            </label>
+
+            <label className="settings-label">
+              simulation environment
+              <input
+                className="settings-input"
+                value={simEnvironment}
+                onChange={(e) => setSimEnvironment(e.target.value)}
+                placeholder={placeholder('sim_environment') || '(framework default)'}
+              />
+            </label>
+          </section>
+
           {/* ── Container ──────────────────────────────────────── */}
           <section className="settings-section">
             <h3 className="settings-section-title">Docker Container</h3>
             <p className="settings-hint">
-              Container dùng để chạy <code>gauge run</code>.
+              Container dùng khi chuyển sang <code>Gauge fallback</code>.
               Để trống → tự động tìm VS Code devcontainer.
             </p>
 

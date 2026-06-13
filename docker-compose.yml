@@ -8,17 +8,17 @@
 #   happened to be running — fragile (container name changes, container not
 #   running, requires VS Code open, etc).
 #
-#   This compose file instead builds a long-lived, dedicated container from
-#   the *same* Dockerfile as the devcontainer, mounts `smart-contracts` and
-#   the viewer backend into it, and runs the FastAPI backend directly inside.
-#   `gauge run` then becomes a plain local subprocess.
+#   This compose file instead builds a long-lived, dedicated container with the
+#   same Gauge/smart-contracts toolchain plus the Go viewer backend. `gauge run`
+#   then becomes a plain local subprocess.
 #
 # ── First-time build ──────────────────────────────────────────────────────────
 #   make docker-build   ← auto-extracts GitHub token from macOS Keychain
 #   docker compose up -d
 #
 #   Or manually if needed:
-#     GITHUB_TOKEN=ghp_xxxx docker compose build viewer-runner
+#     echo 'GITHUB_TOKEN=ghp_xxxx' > runner/.env
+#     docker compose build viewer-runner
 #
 #   The build downloads and pre-installs all Python deps, bun packages and the
 #   Gauge Python plugin into the image. After that `docker compose up` starts
@@ -48,9 +48,9 @@ services:
         BUN_VERSION: "1.2.1"
       secrets:
         # GITHUB_TOKEN is passed as a BuildKit secret — never stored in any
-        # image layer or visible in `docker history`.
-        # Use `make docker-build` to auto-extract it from macOS Keychain,
-        # or set it manually: GITHUB_TOKEN=ghp_xxx docker compose build viewer-runner
+        # image layer or visible in `docker history`. The secret file is the
+        # same runner/.env used at container runtime, so direct
+        # `docker compose up --build` works too.
         - github_token
     container_name: sim-viewer-runner
     user: vscode
@@ -63,6 +63,7 @@ services:
       DEVELOPMENT_MODE: "1"
       DOCKER_ENVIRONMENT: "1"
       SMART_CONTRACTS_DIR: /workspaces/smart-contracts
+      VIEWER_DIR: /opt
       # Venv paths are baked into the image (set as ENV in the Dockerfile).
       # Repeating them here ensures subprocesses launched via `docker exec`
       # also see the correct values.
@@ -71,13 +72,12 @@ services:
     volumes:
       # smart-contracts source tree (bind-mount, writable so gauge can run)
       - ../smart-contracts:/workspaces/smart-contracts
-      # viewer backend source (bind-mount for live reload)
-      - ./backend:/opt/viewer-backend
       # runner scripts / .env
       - ./runner:/opt/viewer-runner
-      # NOTE: /opt/sc-venv and /opt/viewer-backend-venv are directories baked
-      # into the image — no volume mounts needed. smart-contracts/.venv is
-      # never touched by this container.
+      # Go backend source for developer tools such as gen_product_defaults.py.
+      - ./backend-go:/opt/viewer-backend-go-src
+      # NOTE: /opt/sc-venv and /opt/viewer-backend-go are baked into the image.
+      # smart-contracts/.venv is never touched by this container.
     ports:
       - "8001:8000"
     entrypoint: ["/opt/viewer-runner/entrypoint.sh"]
@@ -101,4 +101,4 @@ services:
 
 secrets:
   github_token:
-    environment: GITHUB_TOKEN
+    file: ${GITHUB_TOKEN_FILE:-./runner/.env}
